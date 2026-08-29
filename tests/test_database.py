@@ -32,6 +32,8 @@ EXPECTED_COLUMNS = {
         "heartbeat_at",
         "started_at",
         "finished_at",
+        "paused_at",
+        "paused_seconds",
         "error",
         "created_at",
     },

@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Thread
 import time
@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 
 from app.config import Settings
 from app.db import Base, build_engine
-from app.jobs import JobStatus
+from app.jobs import JobControlState, JobStatus
 from app.main import create_app
 from app.models.job import Job, JobItem
 from app.models.source_file import SourceFile
@@ -24,6 +24,7 @@ from app.services.jobs import (
     ItemProcessor,
     JobService,
     fake_item_processor,
+    reconcile_worker_jobs,
     recover_stale_jobs,
 )
 from app.tasks.queue import JobTaskQueue, build_job_task_queue
@@ -537,6 +538,121 @@ def test_queued_job_can_pause_resume_and_complete(infra_factory) -> None:
     assert infra.client.get(f"/api/admin/jobs/{created['id']}").json()[
         "status"
     ] == "COMPLETED"
+
+
+def test_paused_elapsed_time_freezes_and_resume_excludes_the_pause(
+    infra_factory,
+) -> None:
+    infra = infra_factory()
+    job_id = infra.client.post("/api/admin/jobs/test-background").json()["id"]
+    started_at = datetime.now(timezone.utc) - timedelta(seconds=90)
+    with infra.application.state.session_factory() as session:
+        job = session.get(Job, job_id)
+        assert job is not None
+        job.status = JobStatus.RUNNING
+        job.started_at = started_at
+        job.heartbeat_at = datetime.now(timezone.utc)
+        session.commit()
+
+    paused = infra.client.post(f"/api/admin/jobs/{job_id}/pause").json()
+    frozen_elapsed = paused["elapsed_seconds"]
+    assert paused["control_state"] == "PAUSED"
+    assert paused["heartbeat_at"] is None
+    assert 89 <= frozen_elapsed <= 91
+
+    time.sleep(1.1)
+    still_paused = infra.client.get(f"/api/admin/jobs/{job_id}").json()
+    assert still_paused["elapsed_seconds"] == frozen_elapsed
+
+    resumed = infra.client.post(f"/api/admin/jobs/{job_id}/resume").json()
+    assert resumed["control_state"] == "ACTIVE"
+    assert resumed["elapsed_seconds"] <= frozen_elapsed + 1
+
+
+def test_resume_reclaims_fresh_running_lease_left_by_container_restart(
+    infra_factory,
+) -> None:
+    infra = infra_factory(item_processor=lambda _item, _heartbeat: None)
+    job_id = infra.client.post("/api/admin/jobs/test-background").json()["id"]
+    # The old Worker had already consumed its Huey delivery when the container
+    # stopped, so remove that delivery and leave a fresh persisted lease behind.
+    assert infra.queue.huey.dequeue() is not None
+    with infra.application.state.session_factory() as session:
+        job = session.get(Job, job_id)
+        item = session.scalar(
+            select(JobItem).where(JobItem.job_id == job_id).order_by(JobItem.id)
+        )
+        assert job is not None and item is not None
+        job.status = JobStatus.RUNNING
+        job.started_at = datetime.now(timezone.utc)
+        job.heartbeat_at = datetime.now(timezone.utc)
+        item.status = JobStatus.RUNNING
+        item.attempts = 1
+        session.commit()
+
+    infra.client.post(f"/api/admin/jobs/{job_id}/pause").raise_for_status()
+    resumed = infra.client.post(f"/api/admin/jobs/{job_id}/resume")
+    assert resumed.status_code == 200, resumed.text
+    _run_next(infra.queue)
+
+    completed = infra.client.get(f"/api/admin/jobs/{job_id}").json()
+    assert completed["status"] == "COMPLETED"
+    assert completed["completed_items"] == completed["total_items"]
+    assert completed["items"][0]["attempts"] == 2
+
+
+def test_worker_startup_reconciles_fresh_active_paused_and_stopped_leases(
+    infra_factory,
+) -> None:
+    infra = infra_factory()
+    with infra.application.state.session_factory() as session:
+        jobs = []
+        for control_state in (
+            JobControlState.ACTIVE,
+            JobControlState.PAUSED,
+            JobControlState.STOPPED,
+        ):
+            job = Job(
+                job_type="test_background",
+                status=JobStatus.RUNNING,
+                control_state=control_state,
+                total_items=1,
+                completed_items=0,
+                failed_items=0,
+                started_at=datetime.now(timezone.utc),
+                heartbeat_at=datetime.now(timezone.utc),
+                finished_at=(
+                    datetime.now(timezone.utc)
+                    if control_state == JobControlState.STOPPED
+                    else None
+                ),
+            )
+            job.items = [JobItem(status=JobStatus.RUNNING, attempts=1)]
+            session.add(job)
+            jobs.append(job)
+        session.commit()
+        ids = [job.id for job in jobs]
+
+    submitted: list[int] = []
+    reconciled = reconcile_worker_jobs(
+        infra.application.state.session_factory,
+        submitted.append,
+    )
+
+    assert reconciled == [ids[0]]
+    assert submitted == [ids[0]]
+    with infra.application.state.session_factory() as session:
+        stored = [session.get(Job, job_id) for job_id in ids]
+        assert all(job is not None and job.status == "QUEUED" for job in stored)
+        assert stored[1].control_state == "PAUSED"
+        assert stored[2].control_state == "STOPPED"
+        assert stored[2].finished_at is not None
+        item_statuses = session.scalars(
+            select(JobItem.status)
+            .where(JobItem.job_id.in_(ids))
+            .order_by(JobItem.job_id)
+        ).all()
+        assert item_statuses == ["QUEUED", "QUEUED", "QUEUED"]
 
 
 def test_running_job_cooperatively_pauses_and_requeues_current_item(

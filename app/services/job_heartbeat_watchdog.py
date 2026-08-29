@@ -20,7 +20,8 @@ def refresh_job_heartbeat(database_path: Path, job_id: int) -> bool:
     with sqlite3.connect(database_path, timeout=5) as connection:
         connection.execute("PRAGMA busy_timeout=5000")
         updated = connection.execute(
-            "UPDATE jobs SET heartbeat_at = ? WHERE id = ? AND status = 'RUNNING'",
+            "UPDATE jobs SET heartbeat_at = ? "
+            "WHERE id = ? AND status = 'RUNNING' AND control_state = 'ACTIVE'",
             (utc_now_text(), job_id),
         )
         connection.commit()

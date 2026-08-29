@@ -101,10 +101,8 @@
     return `${size >= 10 ? size.toFixed(1) : size.toFixed(2)} ${unit}`;
   };
   const formatDuration = (job) => {
-    const start = parseDate(job.started_at || job.created_at);
-    if (!start) return "—";
-    const end = parseDate(job.finished_at) || new Date();
-    const seconds = Math.max(0, Math.round((end - start) / 1000));
+    if (!job.started_at) return "—";
+    const seconds = Math.max(0, Math.round(Number(job.elapsed_seconds || 0)));
     if (seconds < 60) return `${seconds} 秒`;
     if (seconds < 3600) return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
     return `${Math.floor(seconds / 3600)} 小时 ${Math.floor((seconds % 3600) / 60)} 分`;

@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-one--container-2496ED?logo=docker&logoColor=white)
 ![No Vector DB](https://img.shields.io/badge/Vector_DB-not_required-2E7D32)
-![Tests](https://img.shields.io/badge/tests-154_passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-157_passed-brightgreen)
 
 [Docker Hub：`saitomikuya/mini-kb-agent`](https://hub.docker.com/r/saitomikuya/mini-kb-agent)
 
@@ -261,8 +261,8 @@ Huey 只负责调度，真实进度保存在主 SQLite 的 `jobs` 与 `job_items
 
 - 不会创建一个新的替代任务；
 - 已完成 item 不会重复执行；
-- RUNNING 任务只有在 heartbeat 超时后才会被接管；
-- 暂停、继续、停止和重试都有持久化状态。
+- 运行中失联任务会按 heartbeat 超时接管，Worker 进程重启时还会立即对账所有未完成任务；
+- 暂停、继续、停止和重试都有持久化状态，耗时会排除暂停和停止等待时间。
 
 ## 完整运行逻辑
 
@@ -414,6 +414,20 @@ docker compose down
 
 `docker compose down` 不会删除两个命名 volume。不要随意添加 `-v`，否则会删除持久化数据。
 
+### 域名与 HTTPS 反向代理
+
+容器会接受来自任意反向代理地址的 `X-Forwarded-Proto`、`X-Forwarded-For` 和 `X-Forwarded-Host`，因此 Nginx、Caddy、Traefik 位于 Docker 网桥或另一台主机时无需额外加入 IP 白名单。前端静态资源使用同源路径，不会因 HTTPS 入口转发到 HTTP 容器而触发 Mixed Content 空白页。
+
+反向代理至少应保留原始 Host，并传递协议：
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+当前部署不使用客户端 IP 做权限判断；访问控制由 Chat/Admin 密码完成。如果把 8080 端口直接暴露到公网，仍应使用防火墙限制直连，仅开放 HTTPS 反代入口。
+
 ### 使用宿主机目录
 
 如果希望直接管理源文件，可以把 Compose 中的 volume 改为 bind mount：
@@ -470,7 +484,7 @@ alembic check
 python -m pip check
 ```
 
-当前测试集包含 154 个测试，覆盖认证、数据库、模型客户端、文件管理、转换、后台任务、增量索引、导航、回答生成、Admin UI 和生产打包。
+当前测试集包含 157 个测试，覆盖认证、数据库、模型客户端、文件管理、转换、后台任务、增量索引、导航、回答生成、Admin UI 和生产打包。
 
 ### 本地构建镜像
 
@@ -628,7 +642,7 @@ Provider 协议设为 `auto` 时，适配器会先真实请求 Responses，失�
 
 ### 任务重启后仍显示 RUNNING？
 
-系统只接管 heartbeat 超过 `JOB_HEARTBEAT_TIMEOUT` 的任务。恢复会重投原 job id，已经完成的 item 不会重做。
+Worker 每次启动都会清理旧 `RUNNING` 租约并重新投递所有活动中的未完成任务，不需要先等待 heartbeat 超时。暂停和停止中的任务只规范化状态，不会自动执行；点击继续或重启后会从未完成 item 接着处理，已完成 item 不会重做。
 
 ### Docker 显示 unhealthy？
 

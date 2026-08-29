@@ -30,6 +30,7 @@ from app.services.secrets import APIKeyCipher
 class JobTaskQueue:
     huey: SqliteHuey
     task: Any
+    session_factory: sessionmaker[Session]
     owned_engine: Engine | None = None
 
     def enqueue(self, job_id: int) -> None:
@@ -119,5 +120,6 @@ def build_job_task_queue(
     return JobTaskQueue(
         huey=huey,
         task=run_background_job,
+        session_factory=session_factory,
         owned_engine=owned_engine,
     )

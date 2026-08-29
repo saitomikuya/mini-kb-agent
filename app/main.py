@@ -76,7 +76,7 @@ def create_app(
 
     application = FastAPI(
         title=active_settings.app_name,
-        version="0.7.0",
+        version="0.7.1",
         lifespan=lifespan,
     )
     application.state.settings = active_settings

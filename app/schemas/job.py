@@ -42,6 +42,7 @@ class JobRead(_JobSchema):
     heartbeat_at: datetime | None
     started_at: datetime | None
     finished_at: datetime | None
+    elapsed_seconds: int
     error: str | None
     created_at: datetime
 

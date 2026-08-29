@@ -23,6 +23,7 @@ def test_docker_and_supervisor_contract() -> None:
     assert "HEALTHCHECK" in dockerfile
     assert "http://127.0.0.1:8080/health" in dockerfile
     assert "python -m uvicorn app.main:app --host 0.0.0.0 --port 8080" in supervisor
+    assert "--proxy-headers --forwarded-allow-ips=*" in supervisor
     assert "huey_consumer.py app.tasks.consumer.huey -w 1 -k thread" in supervisor
     assert supervisor.count("stopsignal=TERM") == 2
     assert supervisor.count("stopasgroup=true") == 2
@@ -84,3 +85,7 @@ def test_entrypoint_is_repeatable_and_preserves_database_and_secret(
         assert connection.execute("SELECT value FROM restart_marker").fetchone() == (
             "preserved",
         )
+        job_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        assert {"paused_at", "paused_seconds"} <= job_columns

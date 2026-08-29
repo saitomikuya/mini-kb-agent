@@ -71,6 +71,9 @@ def test_admin_page_exposes_login_and_merged_management_sections(tmp_path: Path)
         assert 'id="file-directory-summary"' in page.text
         admin_script = unauthenticated.get("/static/admin.js")
         assert admin_script.status_code == 200
+        assert 'href="/static/admin.css?' in page.text
+        assert 'src="/static/admin.js?' in page.text
+        assert "http://testserver/static/" not in page.text
         assert "buildFileTree" in admin_script.text
         assert "resolveFileTreeBranch" in admin_script.text
         assert "currentFileFolderPath" in admin_script.text
@@ -151,6 +154,7 @@ def test_admin_page_exposes_login_and_merged_management_sections(tmp_path: Path)
         assert 'id="apply-profile"' not in page.text
         assert "apply-all-roles" not in admin_script.text
         assert "}, 1000);" in admin_script.text
+        assert "job.elapsed_seconds" in admin_script.text
         assert "运行期间每 1 秒刷新" in page.text
         assert "Profile 中的上下文和输出表示模型能力上限" in page.text
         assert 'id="tuning-form"' in page.text

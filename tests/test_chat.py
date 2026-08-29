@@ -311,6 +311,9 @@ def test_root_directly_renders_public_chat_login_and_local_history_ui(
     assert "聊天记录仅保存在本浏览器，不会上传云端" in page.text
     assert "输入问题，开始知识问答。" in page.text
     assert "React" not in page.text
+    assert 'href="/static/chat.css?' in page.text
+    assert 'src="/static/chat.js?' in page.text
+    assert "http://testserver/static/" not in page.text
 
     direct_session_page = client.get("/chat/browser-session-id")
     assert direct_session_page.status_code == 200

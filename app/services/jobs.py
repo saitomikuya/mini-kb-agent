@@ -103,7 +103,14 @@ class JobService:
             raise JobConflictError("Only an unfinished job can be paused")
         if job.control_state == JobControlState.STOPPED:
             raise JobConflictError("A stopped job must be restarted")
+        if job.control_state == JobControlState.PAUSED:
+            return self.get_job(job_id)
         job.control_state = JobControlState.PAUSED
+        if job.started_at is not None:
+            job.paused_at = utc_now()
+        # Make a resume delivery immediately claimable even if the old Worker
+        # disappeared before it could cooperatively turn RUNNING into QUEUED.
+        job.heartbeat_at = None
         self.session.commit()
         return self.get_job(job_id)
 
@@ -113,19 +120,44 @@ class JobService:
             raise JobConflictError("Only a paused job can be resumed")
         if job.status not in ACTIVE_JOB_STATUSES:
             raise JobConflictError("This job has already finished")
+        previous_paused_at = job.paused_at
+        previous_paused_seconds = job.paused_seconds
+        previous_finished_at = job.finished_at
+        previous_error = job.error
+        if job.paused_at is not None:
+            job.paused_seconds += _seconds_between(job.paused_at, utc_now())
+            job.paused_at = None
         job.control_state = JobControlState.ACTIVE
         job.finished_at = None
         job.error = None
         self.session.commit()
-        self.enqueue(job.id)
+        try:
+            self.enqueue(job.id)
+        except Exception as exc:
+            job.control_state = JobControlState.PAUSED
+            job.paused_at = previous_paused_at
+            job.paused_seconds = previous_paused_seconds
+            job.finished_at = previous_finished_at
+            job.error = previous_error
+            self.session.commit()
+            raise JobServiceError(
+                f"Could not resume background job: {_error_text(exc)}"
+            ) from exc
         return self.get_job(job_id)
 
     def stop_job(self, job_id: int) -> JobDetailRead:
         job = self._get_job_model(job_id)
         if job.status not in ACTIVE_JOB_STATUSES:
             raise JobConflictError("This job has already finished")
+        if job.control_state == JobControlState.STOPPED:
+            return self.get_job(job_id)
+        now = utc_now()
+        if job.paused_at is not None:
+            job.paused_seconds += _seconds_between(job.paused_at, now)
+            job.paused_at = None
         job.control_state = JobControlState.STOPPED
-        job.finished_at = utc_now()
+        job.heartbeat_at = None
+        job.finished_at = now
         self.session.commit()
         return self.get_job(job_id)
 
@@ -140,6 +172,14 @@ class JobService:
             for item in job.items
         ):
             raise JobConflictError("This job has no unfinished items to restart")
+        previous_finished_at = job.finished_at
+        previous_paused_seconds = job.paused_seconds
+        previous_status = job.status
+        previous_current_file_id = job.current_file_id
+        previous_heartbeat_at = job.heartbeat_at
+        previous_error = job.error
+        if job.started_at is not None and job.finished_at is not None:
+            job.paused_seconds += _seconds_between(job.finished_at, utc_now())
         job.control_state = JobControlState.ACTIVE
         job.status = JobStatus.QUEUED
         job.current_file_id = None
@@ -147,7 +187,20 @@ class JobService:
         job.finished_at = None
         job.error = None
         self.session.commit()
-        self.enqueue(job.id)
+        try:
+            self.enqueue(job.id)
+        except Exception as exc:
+            job.control_state = JobControlState.STOPPED
+            job.status = previous_status
+            job.current_file_id = previous_current_file_id
+            job.heartbeat_at = previous_heartbeat_at
+            job.finished_at = previous_finished_at
+            job.paused_seconds = previous_paused_seconds
+            job.error = previous_error
+            self.session.commit()
+            raise JobServiceError(
+                f"Could not restart background job: {_error_text(exc)}"
+            ) from exc
         return self.get_job(job_id)
 
     def delete_job(self, job_id: int) -> None:
@@ -688,6 +741,78 @@ def recover_stale_jobs(
     return recovered
 
 
+def reconcile_worker_jobs(
+    session_factory: sessionmaker[Session],
+    enqueue: JobEnqueuer,
+) -> list[int]:
+    """Repair orphaned leases and ensure every active unfinished job is queued.
+
+    This runs when the sole Worker process starts. No persisted RUNNING lease can
+    belong to that new process, even when its heartbeat is younger than the
+    normal stale timeout. PAUSED and STOPPED jobs are normalized but deliberately
+    not submitted until an administrator resumes or restarts them.
+    """
+    with session_factory() as session:
+        running_ids = list(
+            session.scalars(
+                select(Job.id).where(Job.status == JobStatus.RUNNING)
+            ).all()
+        )
+
+    for job_id in running_ids:
+        with session_factory() as session:
+            running_source_ids = session.scalars(
+                select(JobItem.source_file_id).where(
+                    JobItem.job_id == job_id,
+                    JobItem.status == JobStatus.RUNNING,
+                    JobItem.source_file_id.is_not(None),
+                )
+            ).all()
+            job = session.get(Job, job_id)
+            if job is None or job.status != JobStatus.RUNNING:
+                continue
+            job.status = JobStatus.QUEUED
+            job.current_file_id = None
+            job.heartbeat_at = None
+            if job.control_state != JobControlState.STOPPED:
+                job.finished_at = None
+            session.execute(
+                update(JobItem)
+                .where(
+                    JobItem.job_id == job_id,
+                    JobItem.status == JobStatus.RUNNING,
+                )
+                .values(status=JobStatus.QUEUED, finished_at=None, error=None)
+            )
+            if running_source_ids:
+                session.execute(
+                    update(SourceFile)
+                    .where(
+                        SourceFile.id.in_(running_source_ids),
+                        SourceFile.conversion_status
+                        == ConversionStatus.CONVERTING,
+                    )
+                    .values(conversion_status=ConversionStatus.QUEUED)
+                )
+            session.commit()
+
+    with session_factory() as session:
+        active_ids = list(
+            session.scalars(
+                select(Job.id)
+                .where(
+                    Job.status.in_(ACTIVE_JOB_STATUSES),
+                    Job.control_state == JobControlState.ACTIVE,
+                )
+                .order_by(Job.id)
+            ).all()
+        )
+
+    for job_id in active_ids:
+        enqueue(job_id)
+    return active_ids
+
+
 def _claim_job(
     job_id: int,
     session_factory: sessionmaker[Session],
@@ -828,9 +953,10 @@ def _suspend_job(
         job.status = JobStatus.QUEUED
         job.current_file_id = None
         job.heartbeat_at = None
-        job.finished_at = (
-            utc_now() if effective_control == JobControlState.STOPPED else None
-        )
+        if effective_control == JobControlState.STOPPED:
+            job.finished_at = job.finished_at or utc_now()
+        else:
+            job.finished_at = None
         job.error = None
         _refresh_progress(session, job)
         session.commit()
@@ -938,3 +1064,11 @@ def _refresh_progress(session: Session, job: Job) -> None:
 def _error_text(exc: BaseException) -> str:
     text = str(exc).strip() or type(exc).__name__
     return text[:ERROR_TEXT_LIMIT]
+
+
+def _seconds_between(start: datetime, end: datetime) -> float:
+    if start.tzinfo is None and end.tzinfo is not None:
+        end = end.astimezone(timezone.utc).replace(tzinfo=None)
+    elif start.tzinfo is not None and end.tzinfo is None:
+        start = start.astimezone(timezone.utc).replace(tzinfo=None)
+    return max(0.0, (end - start).total_seconds())

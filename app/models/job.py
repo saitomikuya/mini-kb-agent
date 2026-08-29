@@ -1,9 +1,19 @@
 """Persistence models for durable background-job state."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -63,6 +73,16 @@ class Job(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    paused_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    paused_seconds: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0.0,
+        server_default="0",
+    )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -76,6 +96,25 @@ class Job(Base):
         passive_deletes=True,
         order_by="JobItem.id",
     )
+
+    @property
+    def elapsed_seconds(self) -> int:
+        """Return wall time spent active, excluding paused/stopped intervals."""
+        if self.started_at is None:
+            return 0
+
+        if self.finished_at is not None:
+            end = self.finished_at
+        elif self.control_state == JobControlState.PAUSED and self.paused_at:
+            end = self.paused_at
+        else:
+            end = datetime.now(timezone.utc)
+
+        start, compatible_end = _compatible_datetimes(self.started_at, end)
+        active_seconds = (
+            compatible_end - start
+        ).total_seconds() - self.paused_seconds
+        return max(0, round(active_seconds))
 
 
 class JobItem(Base):
@@ -121,3 +160,15 @@ class JobItem(Base):
     )
 
     job: Mapped[Job] = relationship(back_populates="items")
+
+
+def _compatible_datetimes(
+    first: datetime,
+    second: datetime,
+) -> tuple[datetime, datetime]:
+    """Normalize SQLite's naive UTC values before datetime arithmetic."""
+    if first.tzinfo is None and second.tzinfo is not None:
+        second = second.astimezone(timezone.utc).replace(tzinfo=None)
+    elif first.tzinfo is not None and second.tzinfo is None:
+        first = first.astimezone(timezone.utc).replace(tzinfo=None)
+    return first, second
