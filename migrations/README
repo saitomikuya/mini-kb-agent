@@ -1,0 +1,4 @@
+Single-database Alembic configuration for mini-kb-agent.
+
+Stage 02 adds the initial chat_sessions, messages, and chat_events revision.
+Stage 03 adds api_providers, model_profiles, and model_role_bindings.

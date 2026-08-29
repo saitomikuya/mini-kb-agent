@@ -1,0 +1,17 @@
+.DS_Store
+.env
+.git
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+*.py[cod]
+*.db
+*.sqlite*
+*.egg-info
+build
+data
+dist
+docs
+sources
+tests

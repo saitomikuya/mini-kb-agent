@@ -1,0 +1,31 @@
+__pycache__/
+.DS_Store
+*.py[cod]
+*.egg-info/
+.coverage
+.pytest_cache/
+.ruff_cache/
+.venv/
+dist/
+build/
+
+# Local runtime state and derived artifacts.
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+data/*
+!data/md/
+!data/index/
+data/md/*
+data/index/*
+!data/md/.gitkeep
+!data/index/.gitkeep
+sources/*
+!sources/.gitkeep
+
+# Local-only deployment settings.
+.env
+docker-compose.override.yml

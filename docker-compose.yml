@@ -1,0 +1,19 @@
+services:
+  mini-kb-agent:
+    image: ${MINI_KB_IMAGE:-saitomikuya/mini-kb-agent:latest}
+    container_name: ${CONTAINER_NAME:-mini-kb-agent}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      CHAT_PASSWORD: ${CHAT_PASSWORD:?请设置 CHAT_PASSWORD}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请设置 ADMIN_PASSWORD}
+      TZ: ${TZ:-Asia/Shanghai}
+      SESSION_MAX_AGE: ${SESSION_MAX_AGE:-604800}
+    volumes:
+      - mini-kb-sources:/app/sources
+      - mini-kb-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  mini-kb-sources:
+  mini-kb-data:

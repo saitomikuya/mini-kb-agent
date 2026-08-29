@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ app_name }} · 聊天</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/chat.css') }}?v=20260829-answer-stream-jobs-v5">
+  </head>
+  <body>
+    <section id="login-view" class="login-view" aria-labelledby="login-title" hidden>
+      <div class="login-card">
+        <div class="brand-mark" aria-hidden="true">知</div>
+        <h1 id="login-title">知问：你的本地知识问答助手</h1>
+        <p class="login-copy">输入聊天密码即可开始。聊天记录只保存在当前浏览器中。</p>
+        <form id="login-form" class="login-form">
+          <label for="chat-password">聊天密码</label>
+          <input id="chat-password" name="password" type="password" autocomplete="current-password" required autofocus>
+          <p id="login-error" class="form-error" role="alert" hidden></p>
+          <button class="primary-button full" type="submit">进入聊天</button>
+        </form>
+      </div>
+    </section>
+
+    <div id="chat-app" class="shell" hidden>
+      <aside id="sessions-panel" class="sessions-panel" aria-label="会话列表">
+        <div class="sidebar-heading">
+          <div>
+            <p class="eyebrow">{{ app_name }}</p>
+            <h1>聊天</h1>
+          </div>
+          <div class="sidebar-actions">
+            <button id="new-session" class="icon-button" type="button" title="新建会话" aria-label="新建会话">＋</button>
+            <button id="close-sessions" class="icon-button sidebar-close-button" type="button" title="关闭会话列表" aria-label="关闭会话列表">×</button>
+          </div>
+        </div>
+        <p class="local-history-note">聊天记录仅保存在本浏览器，不会上传云端</p>
+        <nav id="sessions" class="sessions" aria-live="polite"></nav>
+      </aside>
+      <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭会话列表" aria-hidden="true" tabindex="-1"></button>
+
+      <main class="chat-panel">
+        <header class="chat-heading">
+          <div class="chat-heading-main">
+            <button id="open-sessions" class="mobile-menu-button" type="button" aria-label="打开会话列表" aria-controls="sessions-panel" aria-expanded="false">
+              <span aria-hidden="true"></span>
+              <span aria-hidden="true"></span>
+              <span aria-hidden="true"></span>
+            </button>
+            <div>
+            <p class="eyebrow">当前会话</p>
+            <h2 id="session-title">新会话</h2>
+            </div>
+          </div>
+          <div class="chat-actions">
+            <button id="source-library-button" class="text-button source-library-button" type="button" aria-haspopup="dialog" aria-controls="source-library-dialog">知识库</button>
+            <button id="logout-button" class="text-button" type="button">退出</button>
+          </div>
+        </header>
+
+        <section id="messages" class="messages" aria-live="polite">
+          <div id="empty-state" class="empty-state">
+            <p>输入问题，开始知识问答。</p>
+          </div>
+        </section>
+
+        <form id="composer" class="composer">
+          <label class="sr-only" for="question">问题</label>
+          <textarea id="question" name="question" rows="2" maxlength="20000" placeholder="询问资料中的事实、来源或文件……" required></textarea>
+          <button id="send" class="send-button" type="submit">发送</button>
+        </form>
+      </main>
+    </div>
+
+    <dialog id="source-library-dialog" class="source-library-dialog" aria-labelledby="source-library-title">
+      <div class="source-library-shell">
+        <header class="source-library-heading">
+          <h2 id="source-library-title">知识库文件</h2>
+          <button id="source-library-close" class="icon-button source-library-close" type="button" title="关闭" aria-label="关闭知识库文件">×</button>
+        </header>
+        <p class="source-library-intro">浏览知识库文件，需要时可直接下载。</p>
+        <div class="source-library-toolbar">
+          <button id="source-library-up" class="source-library-up" type="button" disabled>← 上一级</button>
+          <nav id="source-library-breadcrumbs" class="source-library-breadcrumbs" aria-label="知识库当前位置"></nav>
+        </div>
+        <label class="sr-only" for="source-library-search">搜索知识库</label>
+        <input id="source-library-search" class="source-library-search" type="search" placeholder="搜索文件名或目录…" autocomplete="off">
+        <p id="source-library-summary" class="source-library-summary" role="status">尚未读取知识库</p>
+        <div id="source-library-list" class="source-library-list" aria-live="polite"></div>
+        <p class="source-library-note">这里仅供浏览和下载，文件管理请前往管理控制台。</p>
+      </div>
+    </dialog>
+    <script src="{{ url_for('static', path='/chat.js') }}?v=20260829-answer-stream-jobs-v5" defer></script>
+  </body>
+</html>

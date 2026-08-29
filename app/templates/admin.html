@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ app_name }} · 管理</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/admin.css') }}?v=20260829-knowledge-tuning-v1">
+  </head>
+  <body>
+    <section id="login-view" class="login-view" aria-labelledby="login-title" hidden>
+      <div class="login-card">
+        <div class="brand-mark" aria-hidden="true">知</div>
+        <p class="eyebrow">{{ app_name }}</p>
+        <h1 id="login-title">管理控制台</h1>
+        <p class="login-copy">输入管理员密码，管理知识文件、后台任务、模型与索引。</p>
+        <form id="login-form" class="login-form">
+          <label for="admin-password">管理员密码</label>
+          <input id="admin-password" name="password" type="password" autocomplete="current-password" required autofocus>
+          <p id="login-error" class="form-error" role="alert" hidden></p>
+          <button class="button primary full" type="submit">进入管理台</button>
+        </form>
+      </div>
+    </section>
+
+    <div id="admin-app" class="admin-shell" hidden>
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark small" aria-hidden="true">知</div>
+          <div>
+            <p class="eyebrow">{{ app_name }}</p>
+            <h1>管理控制台</h1>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <a class="button quiet" href="/chat">打开聊天</a>
+          <button id="logout-button" class="button quiet" type="button">退出</button>
+        </div>
+      </header>
+
+      <nav class="tabs" role="tablist" aria-label="管理功能">
+        <button class="tab active" id="tab-files" type="button" role="tab" aria-selected="true" aria-controls="panel-files" data-tab="files">文件</button>
+        <button class="tab" id="tab-jobs" type="button" role="tab" aria-selected="false" aria-controls="panel-jobs" data-tab="jobs">任务</button>
+        <button class="tab" id="tab-models" type="button" role="tab" aria-selected="false" aria-controls="panel-models" data-tab="models">模型</button>
+        <button class="tab" id="tab-tuning" type="button" role="tab" aria-selected="false" aria-controls="panel-tuning" data-tab="tuning">问答调优</button>
+      </nav>
+
+      <main class="workspace">
+        <section id="panel-files" class="tab-panel" role="tabpanel" aria-labelledby="tab-files" data-panel="files">
+          <div class="section-heading">
+            <div>
+              <h2>知识文件</h2>
+              <p class="section-copy">源文件是知识库的事实来源；Markdown 与索引均可重新生成。</p>
+            </div>
+            <div class="action-row">
+              <button class="button primary" type="button" data-action="open-upload">上传文件 / 文件夹</button>
+              <button class="button" type="button" data-action="scan">扫描变化</button>
+              <button class="button" type="button" data-action="convert-changed">转换有变化的文件</button>
+            </div>
+          </div>
+          <div class="table-card">
+            <div class="file-browser-toolbar">
+              <button id="file-browser-up" class="button quiet compact file-browser-up" type="button" data-action="open-file-folder" data-folder-path="" disabled>↑ 上一级</button>
+              <nav id="file-breadcrumbs" class="file-breadcrumbs" aria-label="当前位置">
+                <span class="file-breadcrumb" aria-current="page">知识库</span>
+              </nav>
+              <span id="file-directory-summary" class="file-directory-summary">正在读取…</span>
+            </div>
+            <div class="file-bulk-toolbar" aria-label="文件批量操作">
+              <span id="file-selection-summary" class="file-selection-summary">已选择 0 个文件</span>
+              <div class="file-bulk-actions">
+                <button id="batch-convert-files" class="button compact" type="button" data-action="batch-convert-files" disabled>转换</button>
+                <button id="batch-delete-files" class="button compact danger" type="button" data-action="batch-delete-files" disabled>删除</button>
+              </div>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th class="selection-column"><input id="files-select-all" class="file-select-box" type="checkbox" aria-label="全选文件"></th><th>文件 / 文件夹</th><th>大小</th><th>源状态</th><th>Markdown 状态</th><th>索引状态</th><th>转换时间</th><th>错误</th><th class="actions-column">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="files-body">
+                  <tr><td class="empty-cell" colspan="9">正在读取文件…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <section class="embedded-index-section" aria-labelledby="index-summary-title">
+            <div class="section-heading">
+              <div>
+                <h2 id="index-summary-title">知识库索引</h2>
+                <p class="section-copy">系统检索索引用于知识问答；可读预览仅供管理员核对。</p>
+              </div>
+              <div class="action-row">
+                <button class="button" type="button" data-action="preview-root-json">预览检索索引</button>
+                <button class="button" type="button" data-action="preview-root-md">预览可读索引</button>
+                <button id="rebuild-index-button" class="button primary" type="button" data-action="rebuild-index">生成索引</button>
+              </div>
+            </div>
+            <div id="index-summary" class="metric-grid">
+              <article class="metric-card"><span>当前索引版本</span><strong>—</strong></article>
+              <article class="metric-card"><span>已索引文件</span><strong>—</strong></article>
+              <article class="metric-card"><span>索引文件夹</span><strong>—</strong></article>
+              <article class="metric-card"><span>最近生成时间</span><strong>—</strong></article>
+            </div>
+          </section>
+        </section>
+
+        <section id="panel-jobs" class="tab-panel" role="tabpanel" aria-labelledby="tab-jobs" data-panel="jobs" hidden>
+          <div class="section-heading">
+            <div>
+              <h2>后台任务</h2>
+              <p class="section-copy">任务由独立 Worker 持续执行；关闭此页面不会中断处理。</p>
+            </div>
+            <span class="poll-note">运行期间每 1 秒刷新</span>
+          </div>
+          <div id="current-job" class="current-job empty-state-card">当前没有运行中的任务</div>
+          <div class="table-card">
+            <div class="table-title-row">
+              <h3>任务记录</h3>
+              <div class="table-title-actions">
+                <button id="delete-all-jobs" class="button danger compact" type="button" data-action="delete-all-jobs">删除全部记录</button>
+                <button class="button quiet compact" type="button" data-action="refresh-jobs">刷新</button>
+              </div>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th>状态</th><th>类型</th><th>成功数 / 总数</th><th>失败数</th><th id="jobs-current-file-heading">当前文件</th><th>开始时间</th><th>耗时</th><th>操作</th></tr></thead>
+                <tbody id="jobs-body"><tr><td class="empty-cell" colspan="8">正在读取任务…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="panel-models" class="tab-panel" role="tabpanel" aria-labelledby="tab-models" data-panel="models" hidden>
+          <div class="section-heading">
+            <div>
+              <h2>模型配置</h2>
+              <p class="section-copy">配置模型连接、能力上限和角色分工；系统实际使用的上下文与输出量在“问答调优”中控制。</p>
+            </div>
+            <button class="button primary" type="button" data-action="open-provider">添加 Provider</button>
+          </div>
+
+          <section class="model-layer" aria-labelledby="providers-title">
+            <div class="layer-heading"><span class="layer-index">A</span><div><h3 id="providers-title">Providers</h3><p>远程服务连接与凭据</p></div></div>
+            <div id="providers-list" class="provider-list"><div class="empty-state-card">正在读取 Provider…</div></div>
+          </section>
+
+          <section class="model-layer" aria-labelledby="profiles-title">
+            <div class="layer-heading"><span class="layer-index">B</span><div><h3 id="profiles-title">Model Profiles</h3><p>填写远程模型名称或 Azure Deployment 即可，其他参数自动设置</p></div></div>
+            <div id="profiles-list" class="profile-groups"><div class="empty-state-card">正在读取 Model Profile…</div></div>
+          </section>
+
+          <section class="model-layer" aria-labelledby="roles-title">
+            <div class="layer-heading"><span class="layer-index">C</span><div><h3 id="roles-title">角色与提示词</h3><p>为四个运行角色选择模型，并按需修改后端已支持的任务提示词</p></div></div>
+            <div id="roles-grid" class="roles-grid"></div>
+            <p class="role-examples">提示词均已提供可直接使用的默认内容；只有展开并保存修改后才会覆盖默认值。</p>
+          </section>
+        </section>
+
+        <section id="panel-tuning" class="tab-panel" role="tabpanel" aria-labelledby="tab-tuning" data-panel="tuning" hidden>
+          <div class="section-heading">
+            <div>
+              <h2>问答调优</h2>
+              <p class="section-copy">Profile 中的上下文和输出表示模型能力上限；这里控制系统实际使用量，运行时始终取两者较小值。</p>
+            </div>
+          </div>
+          <form id="tuning-form" class="tuning-form">
+            <section class="tuning-card">
+              <div class="tuning-card-heading"><div><h3>上下文与回答</h3><p>立即影响新问题；提高数值会增加耗时与费用，不会绕过 Profile 上限。</p></div><span class="effect-badge immediate">立即生效</span></div>
+              <div class="tuning-grid">
+                <label class="field"><span>路由实际上下文 <small>推荐 32K–128K</small></span><input name="query_router_context_tokens" type="number" min="4096" max="2000000" step="1024" required></label>
+                <label class="field"><span>路由实际最大输出 <small>推荐 1K–4K</small></span><input name="navigation_default_max_output_tokens" type="number" min="256" max="65536" step="256" required></label>
+                <label class="field"><span>回答实际上下文 <small>推荐 64K–128K</small></span><input name="answer_context_tokens" type="number" min="4096" max="2000000" step="1024" required></label>
+                <label class="field"><span>回答实际最大输出 <small>推荐 4K–8K</small></span><input name="answer_max_output_tokens" type="number" min="256" max="65536" step="256" required></label>
+                <label class="field"><span>回答详细度</span><select name="answer_verbosity"><option value="low">简洁</option><option value="medium">均衡</option><option value="high">详细</option></select></label>
+                <label class="field"><span>上下文安全余量 <small>百分比，推荐 5%</small></span><input name="navigation_context_safety_percent" type="number" min="1" max="25" required></label>
+                <label class="field"><span>root 单次输入上限 <small>推荐 32K</small></span><input name="navigation_root_input_token_cap" type="number" min="1024" max="1000000" step="1024" required></label>
+                <label class="field"><span>folder 单次输入上限 <small>推荐 64K</small></span><input name="navigation_folder_input_token_cap" type="number" min="1024" max="1000000" step="1024" required></label>
+              </div>
+            </section>
+
+            <section class="tuning-card">
+              <div class="tuning-card-heading"><div><h3>召回与证据选择</h3><p>控制候选覆盖和最终证据广度；大量文件时优先增加候选，不要无上限增加最终 part。</p></div><span class="effect-badge immediate">立即生效</span></div>
+              <div class="tuning-grid">
+                <label class="field"><span>最多选择文档</span><input name="navigation_max_selected_documents" type="number" min="1" max="100" required></label>
+                <label class="field"><span>最多选择 part</span><input name="navigation_max_selected_parts" type="number" min="1" max="200" required></label>
+                <label class="field"><span>词法候选 part 总数</span><input name="lexical_candidate_parts" type="number" min="1" max="200" required></label>
+                <label class="field"><span>单文档最多词法候选</span><input name="lexical_max_parts_per_document" type="number" min="1" max="100" required></label>
+                <label class="field"><span>低信心词法兜底 part</span><input name="lexical_fallback_parts" type="number" min="1" max="50" required></label>
+                <label class="field"><span>低信心阈值 <small>百分比</small></span><input name="navigation_low_confidence_percent" type="number" min="1" max="100" required></label>
+              </div>
+            </section>
+
+            <section class="tuning-card">
+              <div class="tuning-card-heading"><div><h3>分块与索引颗粒度</h3><p>保存后只影响后续任务；分块参数需重新转换文件，root 参数需重新生成索引。</p></div><span class="effect-badge rebuild">需重建</span></div>
+              <div class="tuning-grid">
+                <label class="field"><span>普通正文每 part 字符上限 <small>推荐 8,000</small></span><input name="document_text_chars_per_part" type="number" min="1000" max="100000" step="500" required></label>
+                <label class="field"><span>表格每 part 最大行数</span><input name="document_excel_rows_per_part" type="number" min="10" max="2000" step="10" required></label>
+                <label class="field"><span>root 文档类型数</span><input name="root_max_document_types" type="number" min="1" max="64" required></label>
+                <label class="field"><span>root 主题数</span><input name="root_max_topics" type="number" min="1" max="128" required></label>
+                <label class="field"><span>root 实体数</span><input name="root_max_entities" type="number" min="1" max="128" required></label>
+                <label class="field"><span>root 代表标题数</span><input name="root_max_representative_titles" type="number" min="1" max="64" required></label>
+                <label class="field"><span>folder 摘要主题数</span><input name="folder_summary_topics" type="number" min="1" max="32" required></label>
+              </div>
+            </section>
+            <p class="form-error" data-tuning-error role="alert" hidden></p>
+            <div class="tuning-actions">
+              <span id="tuning-updated-at" class="muted-text">尚未保存自定义配置</span>
+              <div class="action-row"><button class="button" type="button" data-action="reconvert-all">按新分块重转全部文件</button><button class="button" type="button" data-action="reset-tuning">恢复系统默认</button><button class="button primary" type="submit">保存调优配置</button></div>
+            </div>
+          </form>
+        </section>
+
+      </main>
+    </div>
+
+    <dialog id="upload-dialog" class="modal">
+      <form id="upload-form" class="modal-card" data-upload-kind="">
+        <div class="modal-heading">
+          <div><p class="eyebrow">Source library</p><h2>上传知识文件</h2></div>
+          <button class="icon-close" type="button" data-close-dialog aria-label="关闭">×</button>
+        </div>
+        <div class="upload-source-card">
+          <div class="upload-source-copy">
+            <span class="upload-source-icon" aria-hidden="true">↑</span>
+            <div>
+              <strong>选择文件或文件夹</strong>
+              <p>选择完成后会自动识别类型；文件夹将保留完整目录结构。</p>
+            </div>
+          </div>
+          <div class="upload-source-actions">
+            <button class="button" type="button" data-upload-picker="file">选择文件</button>
+            <button class="button" type="button" data-upload-picker="folder">选择文件夹</button>
+          </div>
+          <input name="file" type="file" multiple hidden>
+          <input name="folder_files" type="file" webkitdirectory directory multiple hidden>
+          <p id="upload-target-folder" class="upload-target-folder">上传位置：知识库根目录</p>
+        </div>
+        <div class="form-grid one-column">
+          <label id="upload-relative-path-field" class="field" hidden><span>目标相对路径 <small>仅单文件可选；留空则上传到当前文件夹</small></span><input name="relative_path" type="text" placeholder="例如：产品/操作手册.pdf" disabled></label>
+        </div>
+        <p id="upload-selection" class="upload-selection" aria-live="polite">请选择文件或文件夹，系统会自动识别上传类型。</p>
+        <p class="form-error" data-upload-error role="alert" hidden></p>
+        <p class="modal-note">支持单文件、多文件和整个文件夹；会自动忽略 .DS_Store、._*、Thumbs.db 等系统文件。已存在的路径不会覆盖，请在文件列表中使用“覆盖”。</p>
+        <div class="modal-actions"><button class="button" type="button" data-close-dialog>取消</button><button class="button primary" type="submit">上传</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="provider-dialog" class="modal">
+      <form id="provider-form" class="modal-card wide">
+        <input name="provider_id" type="hidden">
+        <div class="modal-heading">
+          <div><p class="eyebrow">Layer A</p><h2 id="provider-dialog-title">添加 Provider</h2></div>
+          <button class="icon-close" type="button" data-close-dialog aria-label="关闭">×</button>
+        </div>
+        <div class="form-grid">
+          <label class="field"><span>Name</span><input name="name" type="text" maxlength="200" required></label>
+          <label class="field"><span>Type</span><select name="provider_type" required><option value="openai_compatible">OpenAI Compatible</option><option value="azure_openai">Azure OpenAI</option><option value="sub2api">Sub2API</option></select></label>
+          <label class="field full-span"><span>Base URL</span><input name="base_url" type="url" placeholder="https://api.example.com/v1" required></label>
+          <label class="field"><span>Protocol</span><select name="protocol_preference"><option value="auto">Auto</option><option value="responses">Responses</option><option value="chat_completions">Chat Completions</option></select></label>
+          <label class="field"><span>Credential <small id="credential-help">必填</small></span><input name="api_key" type="password" autocomplete="off" required></label>
+          <div id="azure-fields" class="subgrid full-span" hidden>
+            <label class="field"><span>Azure mode</span><select name="azure_mode"><option value="v1">v1</option><option value="legacy">Legacy</option></select></label>
+            <label class="field"><span>API version <small>Legacy 可选</small></span><input name="azure_api_version" type="text" maxlength="64" placeholder="2025-04-01-preview"></label>
+          </div>
+          <label class="field full-span"><span>Extra headers JSON</span><textarea name="extra_headers_json" rows="3" spellcheck="false">{}</textarea></label>
+          <label class="check-field full-span"><input name="enabled" type="checkbox" checked><span>启用此 Provider</span></label>
+        </div>
+        <p class="form-error" data-form-error role="alert" hidden></p>
+        <div class="modal-actions"><button class="button" type="button" data-close-dialog>取消</button><button class="button primary" type="submit">保存 Provider</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="profile-dialog" class="modal">
+      <form id="profile-form" class="modal-card wide">
+        <input name="profile_id" type="hidden">
+        <div class="modal-heading">
+          <div><p class="eyebrow">Layer B</p><h2 id="profile-dialog-title">添加 Model Profile</h2></div>
+          <button class="icon-close" type="button" data-close-dialog aria-label="关闭">×</button>
+        </div>
+        <div class="form-grid">
+          <label class="field"><span>所属 Provider</span><select name="provider_id" required></select></label>
+          <label class="field"><span>配置名称 <small>便于管理员识别</small></span><input name="name" type="text" maxlength="200" placeholder="例如：快速文本模型" required></label>
+          <label class="field full-span"><span>模型名称 / Azure Deployment</span><input name="remote_model_name" type="text" maxlength="300" placeholder="例如：gpt-5-mini" required></label>
+          <label class="field"><span>模型上下文上限 <small>按供应商能力填写</small></span><input name="context_window" type="number" min="4096" max="2000000" step="1024" value="32768" required></label>
+          <label class="field"><span>模型输出上限 <small>按供应商能力填写</small></span><input name="max_output_tokens" type="number" min="256" max="65536" step="256" value="4096" required></label>
+          <label class="check-field full-span"><input name="enabled" type="checkbox" checked><span>启用此 Model Profile</span></label>
+        </div>
+        <p class="model-default-note">这里填写供应商公布的模型能力上限。实际调用量由“问答调优”设置，运行时取 Profile 上限与调优值中的较小值。</p>
+        <p class="form-error" data-form-error role="alert" hidden></p>
+        <div class="modal-actions"><button class="button" type="button" data-close-dialog>取消</button><button class="button primary" type="submit">保存 Model Profile</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="preview-dialog" class="modal preview-modal">
+      <div class="modal-card preview-card">
+        <div class="modal-heading">
+          <div><p id="preview-kicker" class="eyebrow">Preview</p><h2 id="preview-title">预览</h2></div>
+          <button class="icon-close" type="button" data-close-dialog aria-label="关闭">×</button>
+        </div>
+        <div class="preview-tabs" role="tablist" aria-label="预览方式">
+          <button id="preview-readable-tab" class="preview-tab active" type="button" role="tab" aria-selected="true" aria-controls="preview-readable-panel" data-preview-tab="readable">可读预览</button>
+          <button id="preview-source-tab" class="preview-tab" type="button" role="tab" aria-selected="false" aria-controls="preview-source-panel" data-preview-tab="source">源文件内容</button>
+        </div>
+        <section id="preview-readable-panel" class="preview-panel" role="tabpanel" aria-labelledby="preview-readable-tab">
+          <div id="preview-readable-content" class="preview-readable-content" tabindex="0"></div>
+        </section>
+        <section id="preview-source-panel" class="preview-panel" role="tabpanel" aria-labelledby="preview-source-tab" hidden>
+          <pre id="preview-content" class="preview-content" tabindex="0"></pre>
+        </section>
+        <div class="modal-actions"><button class="button" type="button" data-close-dialog>关闭</button></div>
+      </div>
+    </dialog>
+
+    <dialog id="job-items-dialog" class="modal job-items-modal">
+      <div class="modal-card job-items-card">
+        <div class="modal-heading">
+          <div><p id="job-items-kicker" class="eyebrow">任务明细</p><h2 id="job-items-title">文件明细</h2></div>
+          <button class="icon-close" type="button" data-close-dialog aria-label="关闭">×</button>
+        </div>
+        <p id="job-items-summary" class="job-items-summary" aria-live="polite">正在读取任务明细…</p>
+        <div class="job-items-table-wrap">
+          <table class="job-items-table">
+            <thead><tr><th>文件</th><th>状态</th><th>尝试次数</th><th>完成时间</th><th>错误</th><th>操作</th></tr></thead>
+            <tbody id="job-items-body"><tr><td class="empty-cell" colspan="6">正在读取任务明细…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="modal-actions">
+          <button id="retry-job-items" class="button primary" type="button" data-action="retry-job-items" hidden>重试失败文件</button>
+          <button class="button" type="button" data-close-dialog>关闭</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="file-progress-dialog" class="modal file-progress-modal">
+      <div class="modal-card file-progress-card">
+        <div class="modal-heading">
+          <div><p id="file-progress-kicker" class="eyebrow">文件进度</p><h2 id="file-progress-title" class="file-progress-title">当前文件</h2></div>
+          <button class="icon-close" type="button" data-close-dialog aria-label="关闭">×</button>
+        </div>
+        <div class="file-progress-overview">
+          <div><span>状态</span><div id="file-progress-status"><span class="status-pill info">准备中</span></div></div>
+          <div><span>当前阶段</span><strong id="file-progress-phase">正在读取进度…</strong></div>
+          <div><span>总体进度</span><strong id="file-progress-percent">0%</strong></div>
+        </div>
+        <div class="file-progress-track" role="progressbar" aria-label="当前文件进度"><div id="file-progress-fill" class="file-progress-fill"></div></div>
+        <p id="file-progress-updated" class="file-progress-updated">等待 Worker 上报</p>
+        <div id="file-progress-metrics" class="file-progress-metrics" aria-live="polite"></div>
+        <p id="file-progress-note" class="file-progress-note">转换 Worker 正在准备文件。</p>
+        <div class="modal-actions"><button class="button" type="button" data-close-dialog>关闭</button></div>
+      </div>
+    </dialog>
+
+    <input id="replace-input" type="file" hidden>
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+    <script src="{{ url_for('static', path='/admin.js') }}?v=20260829-knowledge-tuning-v1" defer></script>
+  </body>
+</html>
