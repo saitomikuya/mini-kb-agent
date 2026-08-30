@@ -18,10 +18,12 @@ import os
 from pathlib import Path
 import re
 import shutil
+import tempfile
 import threading
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 import zipfile
+from xml.etree import ElementTree
 
 from markitdown import MarkItDown
 from openpyxl import load_workbook
@@ -61,6 +63,10 @@ LEGACY_VECTOR_MEDIA_TYPES = frozenset(
 LEGACY_VECTOR_FALLBACK = (
     "**Embedded visual unavailable:** a legacy WMF/EMF vector image could not "
     "be rasterized; no visual details were inferred."
+)
+VISUAL_REQUEST_FALLBACK = (
+    "**Embedded visual unavailable:** the vision service could not analyze this "
+    "embedded image after retries; no visual details were inferred."
 )
 PDF_TEXT_MIN_CHARACTERS = 40
 PDF_RENDER_SCALE = 1.5
@@ -535,6 +541,11 @@ class DocumentConversionEngine:
                 [(image_bytes, media_type) for _, image_bytes, media_type in collected],
                 heartbeat or (lambda: None),
                 progress_scope="embedded_visuals",
+                # Office files often contain many independently useful images.
+                # Do not discard all deterministic text and successful visual
+                # evidence because a small remainder exhausted its retries. If
+                # every visual request fails, _visual_enrichments still raises.
+                allow_partial_failures=True,
             )
             for (placeholder, _, _), description in zip(
                 collected,
@@ -719,12 +730,11 @@ class DocumentConversionEngine:
         path: Path,
         heartbeat: Heartbeat,
     ) -> Iterator[PartDraft]:
+        repaired_package = None
         try:
-            workbook = load_workbook(
-                filename=path,
+            workbook, repaired_package = _load_xlsx_workbook(
+                path,
                 read_only=True,
-                data_only=False,
-                keep_links=False,
             )
         except Exception as exc:
             raise DocumentConversionError("XLSX workbook could not be opened") from exc
@@ -774,6 +784,8 @@ class DocumentConversionEngine:
                 raise DocumentConversionError("XLSX workbook contains no sheets")
         finally:
             workbook.close()
+            if repaired_package is not None:
+                repaired_package.close()
 
         if _xlsx_contains_embedded_media(path):
             yield from self._extract_xlsx_images(path, heartbeat)
@@ -785,12 +797,11 @@ class DocumentConversionEngine:
         path: Path,
         heartbeat: Heartbeat,
     ) -> Iterator[PartDraft]:
+        repaired_package = None
         try:
-            workbook = load_workbook(
-                filename=path,
+            workbook, repaired_package = _load_xlsx_workbook(
+                path,
                 read_only=False,
-                data_only=False,
-                keep_links=False,
             )
         except Exception as exc:
             raise DocumentConversionError(
@@ -879,6 +890,8 @@ class DocumentConversionEngine:
             self._emit_progress(phase="extracted")
         finally:
             workbook.close()
+            if repaired_package is not None:
+                repaired_package.close()
 
     def _extract_xls(
         self,
@@ -1056,6 +1069,7 @@ class DocumentConversionEngine:
         heartbeat: Heartbeat = lambda: None,
         *,
         progress_scope: str | None = None,
+        allow_partial_failures: bool = False,
     ) -> list[str]:
         if not images:
             self._last_visual_stats = {
@@ -1157,6 +1171,7 @@ class DocumentConversionEngine:
                     f"{progress_scope}_model_requests": len(pending_requests),
                     f"{progress_scope}_model_completed": 0,
                     f"{progress_scope}_legacy": legacy_items,
+                    f"{progress_scope}_failed": 0,
                 }
             )
         if not pending_requests:
@@ -1229,16 +1244,16 @@ class DocumentConversionEngine:
             )
 
         generated = asyncio.run(generate_all())
-        failures: list[Exception] = []
+        failures: list[tuple[list[int], Exception]] = []
         control_signal: BaseException | None = None
-        for (_indices, _cache_path, _, _), item in zip(
+        for (indices, _cache_path, _, _), item in zip(
             pending_requests,
             generated,
             strict=True,
         ):
             if isinstance(item, BaseException):
                 if isinstance(item, Exception):
-                    failures.append(item)
+                    failures.append((indices, item))
                 else:
                     control_signal = item
                 continue
@@ -1246,12 +1261,31 @@ class DocumentConversionEngine:
         if control_signal is not None:
             raise control_signal
         if failures:
-            failure = failures[0]
-            cause_name = type(failure.__cause__ or failure).__name__
-            raise VisualConversionModelError(
-                "The document_conversion vision model failed during image enrichment "
-                f"({type(failure).__name__}; cause: {cause_name})"
-            ) from failure
+            successful_items = (
+                sum(text is not None for text in result_slots) - legacy_items
+            )
+            if allow_partial_failures and successful_items:
+                failed_items = 0
+                for indices, _failure in failures:
+                    failed_items += len(indices)
+                    for index in indices:
+                        result_slots[index] = VISUAL_REQUEST_FALLBACK
+                self._last_visual_stats["failed_items"] = failed_items
+                if progress_scope:
+                    scope_completed += failed_items
+                    self._emit_progress(
+                        **{
+                            f"{progress_scope}_completed": scope_completed,
+                            f"{progress_scope}_failed": failed_items,
+                        }
+                    )
+            else:
+                failure = failures[0][1]
+                cause_name = type(failure.__cause__ or failure).__name__
+                raise VisualConversionModelError(
+                    "The document_conversion vision model failed during image enrichment "
+                    f"({type(failure).__name__}; cause: {cause_name})"
+                ) from failure
         if any(not text for text in result_slots):
             raise VisualConversionModelError(
                 "The document_conversion vision model returned no usable content"
@@ -1715,6 +1749,75 @@ def _read_text(path: Path) -> str:
         return path.read_text(encoding=encoding)
     except (UnicodeError, OSError) as exc:
         raise DocumentConversionError("Text source could not be decoded") from exc
+
+
+def _load_xlsx_workbook(
+    path: Path,
+    *,
+    read_only: bool,
+) -> tuple[Any, Any | None]:
+    """Open an XLSX and repair harmless empty fill records in a private copy.
+
+    Some WPS/third-party exports emit ``<fill/>`` entries in ``styles.xml``.
+    Excel accepts those packages, but openpyxl rejects the entire workbook with
+    ``expected Fill`` before any cell value can be read. The repair is limited
+    to replacing those empty style records with an explicit no-fill pattern;
+    source bytes are never changed.
+    """
+    options = {
+        "read_only": read_only,
+        "data_only": False,
+        "keep_links": False,
+    }
+    try:
+        return load_workbook(filename=path, **options), None
+    except Exception as original_error:
+        repaired = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+        try:
+            if not _write_xlsx_with_repaired_empty_fills(path, repaired):
+                raise original_error
+            repaired.seek(0)
+            workbook = load_workbook(filename=repaired, **options)
+            return workbook, repaired
+        except BaseException:
+            repaired.close()
+            raise
+
+
+def _write_xlsx_with_repaired_empty_fills(path: Path, target: Any) -> bool:
+    from defusedxml import ElementTree as DefusedElementTree
+
+    spreadsheet_namespace = (
+        "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    )
+    fill_tag = f"{{{spreadsheet_namespace}}}fill"
+    fills_tag = f"{{{spreadsheet_namespace}}}fills"
+    pattern_fill_tag = f"{{{spreadsheet_namespace}}}patternFill"
+    repaired_count = 0
+
+    with zipfile.ZipFile(path) as source, zipfile.ZipFile(target, "w") as destination:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if item.filename == "xl/styles.xml":
+                root = DefusedElementTree.fromstring(data)
+                fills = root.find(fills_tag)
+                if fills is not None:
+                    for fill in fills.findall(fill_tag):
+                        if len(fill) == 0:
+                            ElementTree.SubElement(
+                                fill,
+                                pattern_fill_tag,
+                                {"patternType": "none"},
+                            )
+                            repaired_count += 1
+                if repaired_count:
+                    data = ElementTree.tostring(
+                        root,
+                        encoding="utf-8",
+                        xml_declaration=True,
+                    )
+            destination.writestr(item, data)
+    return repaired_count > 0
 
 
 def _xlsx_contains_embedded_media(path: Path) -> bool:

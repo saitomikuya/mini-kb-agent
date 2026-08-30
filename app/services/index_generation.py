@@ -120,38 +120,44 @@ class DocumentPlan:
         return not self.hierarchical
 
 
-CARD_MODEL_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": [
-        "title",
-        "document_type",
-        "summary",
-        "topics",
-        "entities",
-        "parts",
-    ],
-    "properties": {
-        "title": {"type": "string"},
-        "document_type": {"type": "string"},
-        "summary": {"type": "string"},
-        "topics": {"type": "array", "items": {"type": "string"}},
-        "entities": {"type": "array", "items": {"type": "string"}},
-        "parts": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["part_id", "label", "summary"],
-                "properties": {
-                    "part_id": {"type": "string"},
-                    "label": {"type": "string"},
-                    "summary": {"type": "string"},
+def _card_model_schema(parts: Sequence[ArtifactPart]) -> dict[str, Any]:
+    """Build the strict card schema for this exact Markdown manifest."""
+    part_ids = [part.part_id for part in parts]
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "title",
+            "document_type",
+            "summary",
+            "topics",
+            "entities",
+            "parts",
+        ],
+        "properties": {
+            "title": {"type": "string"},
+            "document_type": {"type": "string"},
+            "summary": {"type": "string"},
+            "topics": {"type": "array", "items": {"type": "string"}},
+            "entities": {"type": "array", "items": {"type": "string"}},
+            "parts": {
+                "type": "array",
+                "minItems": len(parts),
+                "maxItems": len(parts),
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["part_id", "label", "summary"],
+                    "properties": {
+                        "part_id": {"type": "string", "enum": part_ids},
+                        "label": {"type": "string"},
+                        "summary": {"type": "string"},
+                    },
                 },
             },
         },
-    },
-}
+    }
+
 
 DOCUMENT_METADATA_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -611,40 +617,58 @@ class IndexGenerationService:
             schema: Mapping[str, Any],
             *,
             max_output_tokens: int,
-        ) -> Mapping[str, Any]:
+            normalize: Callable[[Mapping[str, Any]], Any] | None = None,
+        ) -> Any:
             nonlocal model_requests_completed
             generated = None
+            normalized = None
+            contract_retry = False
             async with semaphore:
                 for attempt in range(INDEX_MODEL_MAX_ATTEMPTS):
                     try:
                         generated = await _await_index_model(
                             client.generate_json(
-                                prompt,
+                                (
+                                    prompt
+                                    if not contract_retry
+                                    else prompt
+                                    + "\n\nThe previous response violated the supplied "
+                                    "JSON/part contract. Regenerate the complete object "
+                                    "with exactly the requested parts and exact part_id "
+                                    "values."
+                                ),
                                 json_schema=schema,
                                 max_output_tokens=max_output_tokens,
                                 reasoning_effort=INDEX_REASONING_EFFORT,
                             ),
                             heartbeat,
                         )
+                        if not isinstance(generated.value, Mapping):
+                            raise DocumentCardError(
+                                "index_generation model returned no JSON object"
+                            )
+                        normalized = (
+                            generated.value
+                            if normalize is None
+                            else normalize(generated.value)
+                        )
                         break
-                    except Exception:
+                    except Exception as exc:
+                        if isinstance(exc, DocumentCardError):
+                            contract_retry = True
                         if attempt + 1 >= INDEX_MODEL_MAX_ATTEMPTS:
                             raise
                         heartbeat()
                         await asyncio.sleep(1.0 * (2**attempt))
             if generated is None:  # pragma: no cover - loop guard
                 raise AssertionError("index model retry loop did not return")
-            if not isinstance(generated.value, Mapping):
-                raise DocumentCardError(
-                    "index_generation model returned no JSON object"
-                )
             model_requests_completed += 1
             self._emit_progress(
                 model_requests_total=model_requests_total,
                 model_requests_completed=model_requests_completed,
                 model_cache_hits=initial_cache_hits,
             )
-            return generated.value
+            return normalized
 
         async def generate_one(plan: DocumentPlan) -> tuple[int, dict[str, Any]]:
             nonlocal documents_completed
@@ -658,16 +682,20 @@ class IndexGenerationService:
             heartbeat()
             try:
                 if plan.is_small:
-                    value = await request_json(
+                    card = await request_json(
                         _card_prompt(
                             record,
                             plan.parts,
                             instruction=role_prompts["document_card"],
                         ),
-                        CARD_MODEL_SCHEMA,
+                        _card_model_schema(plan.parts),
                         max_output_tokens=INDEX_CARD_MAX_OUTPUT_TOKENS,
+                        normalize=lambda value: _normalize_model_card(
+                            record,
+                            plan.parts,
+                            value,
+                        ),
                     )
-                    card = _normalize_model_card(record, plan.parts, value)
                 else:
                     batch_results: list[Mapping[str, Any] | None] = [
                         None
@@ -679,7 +707,7 @@ class IndexGenerationService:
                         batch_index: int,
                         batch: tuple[ArtifactPart, ...],
                     ) -> None:
-                        value = await request_json(
+                        normalized = await request_json(
                             _part_batch_prompt(
                                 record,
                                 batch,
@@ -690,8 +718,11 @@ class IndexGenerationService:
                                 INDEX_BATCH_MAX_OUTPUT_TOKENS,
                                 max(2_048, len(batch) * 384),
                             ),
+                            normalize=lambda value: _normalize_part_batch(
+                                batch,
+                                value,
+                            ),
                         )
-                        normalized = _normalize_part_batch(batch, value)
                         batch_results[batch_index] = normalized
                         _atomic_write_json(
                             self._part_batch_cache_path(
@@ -825,7 +856,7 @@ class IndexGenerationService:
             generated = asyncio.run(
                 client.generate_json(
                     prompt,
-                    json_schema=CARD_MODEL_SCHEMA,
+                    json_schema=_card_model_schema(parts),
                     max_output_tokens=INDEX_CARD_MAX_OUTPUT_TOKENS,
                     reasoning_effort=INDEX_REASONING_EFFORT,
                 )

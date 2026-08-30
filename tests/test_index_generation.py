@@ -135,17 +135,37 @@ def _add_ready_document(
 
 
 def _write_artifact(settings: Settings, record: SourceFile, body: str) -> None:
+    _write_artifact_parts(settings, record, [body])
+
+
+def _write_artifact_parts(
+    settings: Settings,
+    record: SourceFile,
+    bodies: list[str],
+) -> None:
     artifact_dir = settings.markdown_dir / str(record.id)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    part = (
-        "---\n"
-        f"document_id: {record.id}\n"
-        "part_id: part-001\n"
-        "---\n\n"
-        f"{body}\n"
-    )
-    part_bytes = part.encode()
-    (artifact_dir / "part-001.md").write_bytes(part_bytes)
+    manifest_parts = []
+    for number, body in enumerate(bodies, start=1):
+        part_id = f"part-{number:03d}"
+        filename = f"{part_id}.md"
+        part = (
+            "---\n"
+            f"document_id: {record.id}\n"
+            f"part_id: {part_id}\n"
+            "---\n\n"
+            f"{body}\n"
+        )
+        part_bytes = part.encode()
+        (artifact_dir / filename).write_bytes(part_bytes)
+        manifest_parts.append(
+            {
+                "part_id": part_id,
+                "path": filename,
+                "anchors": {"section": f"section-{number}"},
+                "sha256": hashlib.sha256(part_bytes).hexdigest(),
+            }
+        )
     manifest = {
         "document_id": record.id,
         "source_path": record.relative_path,
@@ -153,14 +173,7 @@ def _write_artifact(settings: Settings, record: SourceFile, body: str) -> None:
         "converted_at": "2026-08-28T00:00:00+00:00",
         "converter_version": "test",
         "status": "READY",
-        "parts": [
-            {
-                "part_id": "part-001",
-                "path": "part-001.md",
-                "anchors": {"section": "section-1"},
-                "sha256": hashlib.sha256(part_bytes).hexdigest(),
-            }
-        ],
+        "parts": manifest_parts,
     }
     (artifact_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False),
@@ -261,6 +274,74 @@ def test_first_build_creates_cards_compact_indexes_and_current_pointer(
     assert card["parts"][0]["source_anchors"] == [{"section": "section-1"}]
     assert first.index_status == IndexStatus.INDEXED
     assert second.index_status == IndexStatus.INDEXED
+
+
+def test_card_schema_requires_manifest_part_count_and_retries_invalid_response(
+    index_infra: IndexInfra,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _add_ready_document(
+        index_infra,
+        "contracts/two-parts.docx",
+        "first section\nsecond section",
+    )
+    _write_artifact_parts(
+        index_infra.settings,
+        document,
+        ["first section", "second section"],
+    )
+
+    class InitiallyIncompleteClient:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def generate_json(self, _prompt: str, **kwargs):
+            self.calls.append(kwargs)
+            part_count = 1 if len(self.calls) == 1 else 2
+            return SimpleNamespace(
+                value={
+                    "title": "Two-part contract",
+                    "document_type": "docx",
+                    "summary": "Two bounded sections.",
+                    "topics": ["contract"],
+                    "entities": [],
+                    "parts": [
+                        {
+                            "part_id": f"part-{number:03d}",
+                            "label": f"Section {number}",
+                            "summary": f"Summary {number}",
+                        }
+                        for number in range(1, part_count + 1)
+                    ],
+                }
+            )
+
+    async def no_delay(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("app.services.index_generation.asyncio.sleep", no_delay)
+    client = InitiallyIncompleteClient()
+    result = IndexGenerationService(
+        index_infra.settings,
+        index_infra.session,
+        model_resolver=lambda _role: client,
+    ).build_and_activate()
+
+    assert result.document_count == 1
+    assert len(client.calls) == 2
+    schema = client.calls[0]["json_schema"]
+    assert schema["properties"]["parts"]["minItems"] == 2
+    assert schema["properties"]["parts"]["maxItems"] == 2
+    assert schema["properties"]["parts"]["items"]["properties"]["part_id"][
+        "enum"
+    ] == ["part-001", "part-002"]
+    card = json.loads(
+        (index_infra.settings.markdown_dir / str(document.id) / "card.json").read_text()
+    )
+    assert [part["part_id"] for part in card["parts"]] == [
+        "part-001",
+        "part-002",
+    ]
 
 
 def test_adding_one_file_calls_model_only_for_new_card(index_infra: IndexInfra) -> None:

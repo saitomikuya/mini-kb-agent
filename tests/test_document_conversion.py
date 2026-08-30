@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import time
+import zipfile
 
 from fastapi.testclient import TestClient
 import httpx
@@ -135,6 +136,49 @@ def test_xlsx_cells_are_deterministic_row_chunks_and_source_is_immutable(
     assert "| 205 | row-204 | 204000.25 | =B205*2 |" in second
     assert source.read_bytes() == source_bytes
     assert source.stat().st_mtime_ns == source_mtime
+
+
+def test_xlsx_with_empty_fill_style_is_repaired_in_private_copy(
+    conversion_infra: ConversionInfra,
+) -> None:
+    source = conversion_infra.settings.source_dir / "third-party-export.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Network"
+    sheet.append(["service", "address", "port"])
+    sheet.append(["vision", "10.0.0.5", 18022])
+    workbook.save(source)
+
+    original = BytesIO(source.read_bytes())
+    repaired_fixture = BytesIO()
+    with zipfile.ZipFile(original) as package, zipfile.ZipFile(
+        repaired_fixture,
+        "w",
+    ) as rewritten:
+        for item in package.infolist():
+            data = package.read(item.filename)
+            if item.filename == "xl/styles.xml":
+                valid_fill = b"<fill><patternFill/></fill>"
+                assert valid_fill in data
+                data = data.replace(valid_fill, b"<fill/>", 1)
+            rewritten.writestr(item, data)
+    source.write_bytes(repaired_fixture.getvalue())
+    source_bytes = source.read_bytes()
+
+    _scan(conversion_infra)
+    queued = conversion_infra.client.post("/api/admin/jobs/convert-changed")
+    assert queued.status_code == 202
+    _run_next(conversion_infra.queue)
+
+    updated = conversion_infra.client.get("/api/admin/files").json()[0]
+    markdown = (
+        conversion_infra.settings.markdown_dir
+        / str(updated["id"])
+        / "part-001.md"
+    ).read_text()
+    assert updated["conversion_status"] == "READY"
+    assert "| 2 | vision | 10.0.0.5 | 18022 |" in markdown
+    assert source.read_bytes() == source_bytes
 
 
 def test_convert_changed_incremental_selection_and_explicit_failed_retry(
@@ -769,6 +813,51 @@ def test_visual_enrichment_preserves_other_successes_when_one_request_fails(
     ) == ["cached good evidence", "recovered bad evidence"]
     assert client.good_calls == 1
     assert client.bad_calls == 4
+
+
+def test_embedded_visual_enrichment_keeps_successes_and_marks_failed_remainder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(data_dir=tmp_path / "data", source_dir=tmp_path / "sources")
+    good = _png_bytes((11, 12, 13))
+    bad = _png_bytes((21, 22, 23))
+
+    class PartiallyUnavailableClient:
+        context_window = 128_000
+        max_output_tokens = 4_096
+
+        async def generate_multimodal(
+            self,
+            _prompt: str,
+            image_bytes: bytes,
+            **_kwargs,
+        ) -> TextGeneration:
+            if image_bytes == bad:
+                raise RuntimeError("persistent connection failure")
+            return TextGeneration(
+                text="searchable successful evidence",
+                protocol=Protocol.RESPONSES,
+                latency_ms=1,
+            )
+
+    engine = DocumentConversionEngine(
+        settings,
+        model_resolver=lambda _role: PartiallyUnavailableClient(),
+    )
+    monkeypatch.setattr(
+        "app.services.document_conversion.VISUAL_RETRY_BASE_DELAY_SECONDS",
+        0,
+    )
+
+    results = engine._visual_enrichments(
+        [(good, "image/png"), (bad, "image/png")],
+        allow_partial_failures=True,
+    )
+
+    assert results[0] == "searchable successful evidence"
+    assert "vision service could not analyze" in results[1]
+    assert engine._last_visual_stats["failed_items"] == 1
 
 
 def test_pptx_conversion_refreshes_heartbeat_during_blocking_extraction(
