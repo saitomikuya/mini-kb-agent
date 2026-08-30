@@ -25,7 +25,14 @@ from app.llm.registry import (
     ModelRoleCapabilityError,
     validate_profile_for_role,
 )
-from app.llm.types import ALL_MODEL_ROLES, ModelRole, ModelTestStatus, TestedProtocol
+from app.llm.types import (
+    ALL_MODEL_ROLES,
+    DEFAULT_ROLE_REASONING_EFFORTS,
+    ModelRole,
+    ModelTestStatus,
+    ReasoningEffort,
+    TestedProtocol,
+)
 from app.models.model_config import (
     APIProvider,
     ModelProfile,
@@ -284,6 +291,7 @@ class ModelConfigService:
         self,
         role: ModelRole,
         model_profile_id: int | None,
+        reasoning_effort: ReasoningEffort | None = None,
     ) -> ModelRoleBindingRead:
         existing = self.session.get(ModelRoleBinding, role.value)
         if model_profile_id is None:
@@ -293,6 +301,8 @@ class ModelConfigService:
             return ModelRoleBindingRead(
                 role=role,
                 model_profile_id=None,
+                reasoning_effort=DEFAULT_ROLE_REASONING_EFFORTS[role],
+                default_reasoning_effort=DEFAULT_ROLE_REASONING_EFFORTS[role],
                 updated_at=None,
                 prompts_updated_at=self._prompt_updated_at(role),
                 prompt_tasks=self._prompt_task_reads(role),
@@ -304,15 +314,26 @@ class ModelConfigService:
         except ModelRoleCapabilityError as exc:
             raise ModelCapabilityError(str(exc)) from exc
         now = datetime.now(timezone.utc)
+        configured_effort = (
+            reasoning_effort.value
+            if reasoning_effort is not None
+            else (
+                existing.reasoning_effort
+                if existing is not None and existing.reasoning_effort
+                else DEFAULT_ROLE_REASONING_EFFORTS[role].value
+            )
+        )
         if existing is None:
             existing = ModelRoleBinding(
                 role=role.value,
                 model_profile_id=model_profile_id,
+                reasoning_effort=configured_effort,
                 updated_at=now,
             )
             self.session.add(existing)
         else:
             existing.model_profile_id = model_profile_id
+            existing.reasoning_effort = configured_effort
             existing.updated_at = now
         self.session.commit()
         self.session.refresh(existing)
@@ -437,9 +458,17 @@ class ModelConfigService:
         binding: ModelRoleBinding | None,
         prompt_setting: ModelRolePromptSetting | None,
     ) -> ModelRoleBindingRead:
+        default_reasoning_effort = DEFAULT_ROLE_REASONING_EFFORTS[role]
+        configured_reasoning_effort = (
+            ReasoningEffort(binding.reasoning_effort)
+            if binding is not None and binding.reasoning_effort
+            else default_reasoning_effort
+        )
         return ModelRoleBindingRead(
             role=role,
             model_profile_id=(binding.model_profile_id if binding is not None else None),
+            reasoning_effort=configured_reasoning_effort,
+            default_reasoning_effort=default_reasoning_effort,
             updated_at=binding.updated_at if binding is not None else None,
             prompts_updated_at=(
                 prompt_setting.updated_at if prompt_setting is not None else None

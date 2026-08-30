@@ -71,6 +71,8 @@ def test_admin_page_exposes_login_and_merged_management_sections(tmp_path: Path)
         assert 'id="file-directory-summary"' in page.text
         admin_script = unauthenticated.get("/static/admin.js")
         assert admin_script.status_code == 200
+        admin_style = unauthenticated.get("/static/admin.css")
+        assert admin_style.status_code == 200
         assert 'href="/static/admin.css?' in page.text
         assert 'src="/static/admin.js?' in page.text
         assert "http://testserver/static/" not in page.text
@@ -78,6 +80,8 @@ def test_admin_page_exposes_login_and_merged_management_sections(tmp_path: Path)
         assert "resolveFileTreeBranch" in admin_script.text
         assert "currentFileFolderPath" in admin_script.text
         assert "open-file-folder" in admin_script.text
+        assert 'button("打开", "open-file-folder")' not in admin_script.text
+        assert 'button("更新", "replace-file")' in admin_script.text
         assert "toggle-file-folder" not in admin_script.text
         assert "appendFolderRows" not in admin_script.text
         assert 'data-upload-picker="file"' in page.text
@@ -92,6 +96,9 @@ def test_admin_page_exposes_login_and_merged_management_sections(tmp_path: Path)
         assert 'id="job-items-body"' in page.text
         assert 'id="delete-all-jobs"' in page.text
         assert 'data-action="delete-all-jobs"' in page.text
+        assert 'id="jobs-summary"' in page.text
+        assert 'class="table-card jobs-table-card"' in page.text
+        assert 'id="current-job"' not in page.text
         assert "Admin session" not in page.text
         assert 'id="file-progress-dialog"' in page.text
         assert 'id="file-progress-metrics"' in page.text
@@ -125,6 +132,12 @@ def test_admin_page_exposes_login_and_merged_management_sections(tmp_path: Path)
         assert "deleteAllJobs" in admin_script.text
         assert 'jsonApi("/api/admin/jobs", { method: "DELETE" })' in admin_script.text
         assert "jobManagementActions" in admin_script.text
+        assert 'jsonApi("/api/admin/jobs/current")' not in admin_script.text
+        assert "job-row-active" in admin_script.text
+        assert "jobTableCell" in admin_script.text
+        assert 'cell.dataset.label = label' in admin_script.text
+        assert ".jobs-table thead { display: none; }" in admin_style.text
+        assert ".file-progress-metrics { grid-template-columns: repeat(2, minmax(0, 1fr));" in admin_style.text
         assert "show-current-file-progress" in admin_script.text
         assert "progressMetrics" in admin_script.text
         assert "direct_text_pages" in admin_script.text
@@ -147,6 +160,9 @@ def test_admin_page_exposes_login_and_merged_management_sections(tmp_path: Path)
         assert "Context Window" not in page.text
         assert "Max Output" not in page.text
         assert "Reasoning Effort" not in page.text
+        assert "推理强度" in page.text
+        assert "REASONING_EFFORT_OPTIONS" in admin_script.text
+        assert 'value: "model_default"' in admin_script.text
         assert "data-role-prompt" in admin_script.text
         assert "save-role-prompts" in admin_script.text
         assert "reset-role-prompts" in admin_script.text
@@ -163,7 +179,11 @@ def test_admin_page_exposes_login_and_merged_management_sections(tmp_path: Path)
         assert 'name="document_text_chars_per_part"' in page.text
         assert 'name="context_window"' in page.text
         assert 'name="max_output_tokens"' in page.text
-        assert "Profile 上限与调优值中的较小值" in page.text
+        assert 'name="max_output_tokens" type="number" min="256" max="128000"' in page.text
+        assert 'name="answer_max_output_tokens" type="number" min="256" max="128000"' in page.text
+        assert "1,050,000" in page.text
+        assert "128,000 tokens" in page.text
+        assert "实际上下文四分之一" in page.text
         assert 'data-action="reconvert-all"' in page.text
         assert 'jsonApi("/api/admin/jobs/reconvert-all"' in admin_script.text
         assert "能力上限：" in admin_script.text
@@ -171,6 +191,8 @@ def test_admin_page_exposes_login_and_merged_management_sections(tmp_path: Path)
         assert "submitTuning" in admin_script.text
         assert "convert-file-folder" in admin_script.text
         assert "delete-file-folder" in admin_script.text
+        assert "last_completed_document_name" in admin_script.text
+        assert "最近完成文档" in admin_script.text
         assert unauthenticated.get("/api/admin/index").status_code == 401
 
 

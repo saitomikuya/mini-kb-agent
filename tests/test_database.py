@@ -99,7 +99,12 @@ EXPECTED_COLUMNS = {
         "created_at",
         "updated_at",
     },
-    "model_role_bindings": {"role", "model_profile_id", "updated_at"},
+    "model_role_bindings": {
+        "role",
+        "model_profile_id",
+        "reasoning_effort",
+        "updated_at",
+    },
     "model_role_prompt_settings": {"role", "prompts_json", "updated_at"},
     "knowledge_tuning_settings": {"id", "values_json", "updated_at"},
     "chat_sessions": {"id", "title", "created_at", "updated_at"},

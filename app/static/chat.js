@@ -941,7 +941,46 @@
       line.style.width = width;
       placeholder.append(line);
     });
-    return { root: placeholder, title, subtitle, reasoning, reasoningText };
+    const answerBody = document.createElement("div");
+    answerBody.className = "answer-body markdown-body is-streaming";
+    const streamState = {
+      root: placeholder,
+      title,
+      subtitle,
+      reasoning,
+      reasoningText,
+      answerBody,
+      streamedMarkdown: "",
+      renderFrame: null,
+      started: false,
+      followAnswer: true,
+      stopFollowing: null,
+    };
+    streamState.stopFollowing = () => { streamState.followAnswer = false; };
+    return streamState;
+  };
+
+  const detachStreamFollowing = (placeholder) => {
+    if (!placeholder?.stopFollowing) return;
+    messagesEl.removeEventListener("wheel", placeholder.stopFollowing);
+    messagesEl.removeEventListener("touchmove", placeholder.stopFollowing);
+  };
+
+  const queueAnswerTextDelta = (placeholder, delta) => {
+    if (!placeholder || typeof delta !== "string" || !delta) return;
+    if (!placeholder.started) {
+      placeholder.root.replaceWith(placeholder.answerBody);
+      placeholder.started = true;
+      messagesEl.addEventListener("wheel", placeholder.stopFollowing, { passive: true });
+      messagesEl.addEventListener("touchmove", placeholder.stopFollowing, { passive: true });
+    }
+    placeholder.streamedMarkdown += delta;
+    if (placeholder.renderFrame !== null) return;
+    placeholder.renderFrame = window.requestAnimationFrame(() => {
+      placeholder.renderFrame = null;
+      renderMarkdown(placeholder.answerBody, placeholder.streamedMarkdown);
+      if (placeholder.followAnswer) scrollToBottom();
+    });
   };
 
   const updateAnswerPlaceholder = (placeholder, type, data) => {
@@ -964,6 +1003,7 @@
       placeholder.title.textContent = "模型正在生成回答";
       placeholder.subtitle.textContent = data.message || "正在完成结构化输出与证据校验";
     }
+    if (type === "answer_text_delta") queueAnswerTextDelta(placeholder, data.delta);
   };
 
   const renderUserMessage = (content) => {
@@ -1145,51 +1185,29 @@
     renderAnswerExtras(parent, answer);
   };
 
-  const renderAnswerProgressively = async (parent, answer) => {
-    const markdown = answerMarkdownWithSourceLinks(answer);
-    const characters = Array.from(markdown);
-    const answerBody = addText(parent, "div", "answer-body markdown-body is-streaming", "");
-    const hydration = hydrateAnswerSources(answer).catch(() => undefined);
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reducedMotion || characters.length < 80) {
-      renderMarkdown(answerBody, markdown);
-      await hydration;
+  const finalizeStreamedAnswer = async (parent, placeholder, answer) => {
+    detachStreamFollowing(placeholder);
+    if (placeholder.renderFrame !== null) {
+      window.cancelAnimationFrame(placeholder.renderFrame);
+      placeholder.renderFrame = null;
+    }
+    if (!placeholder.started) {
+      placeholder.root.remove();
+      const answerBody = addText(parent, "div", "answer-body markdown-body", "");
+      renderMarkdown(answerBody, answer.answer_markdown || "");
+      await hydrateAnswerSources(answer).catch(() => undefined);
       renderMarkdown(answerBody, answerMarkdownWithSourceLinks(answer));
-      answerBody.classList.remove("is-streaming");
       renderAnswerExtras(parent, answer);
-      scrollToBottom();
+      if (placeholder.followAnswer) scrollToBottom();
       return;
     }
 
-    let followAnswer = true;
-    const stopFollowing = () => { followAnswer = false; };
-    messagesEl.addEventListener("wheel", stopFollowing, { passive: true });
-    messagesEl.addEventListener("touchmove", stopFollowing, { passive: true });
-    const duration = Math.min(5200, Math.max(1200, characters.length * 3.2));
-    let lastVisible = 0;
-    await new Promise((resolve) => {
-      let startedAt;
-      const frame = (now) => {
-        if (startedAt === undefined) startedAt = now;
-        const progress = Math.min(1, (now - startedAt) / duration);
-        const visible = Math.max(1, Math.ceil(characters.length * progress));
-        if (visible !== lastVisible) {
-          renderMarkdown(answerBody, characters.slice(0, visible).join(""));
-          lastVisible = visible;
-          if (followAnswer) scrollToBottom();
-        }
-        if (progress < 1) window.requestAnimationFrame(frame);
-        else resolve();
-      };
-      window.requestAnimationFrame(frame);
-    });
-    messagesEl.removeEventListener("wheel", stopFollowing);
-    messagesEl.removeEventListener("touchmove", stopFollowing);
-    await hydration;
-    renderMarkdown(answerBody, answerMarkdownWithSourceLinks(answer));
-    answerBody.classList.remove("is-streaming");
+    renderMarkdown(placeholder.answerBody, answer.answer_markdown || "");
+    await hydrateAnswerSources(answer).catch(() => undefined);
+    renderMarkdown(placeholder.answerBody, answerMarkdownWithSourceLinks(answer));
+    placeholder.answerBody.classList.remove("is-streaming");
     renderAnswerExtras(parent, answer);
-    if (followAnswer) scrollToBottom();
+    if (placeholder.followAnswer) scrollToBottom();
   };
 
   const parseAnchor = (anchor) => {
@@ -1603,11 +1621,12 @@
         body: JSON.stringify({ question }),
       });
       await parseSSE(response, async (type, data) => {
-        appendTrace(trace, type, data);
+        if (type !== "answer_text_delta") appendTrace(trace, type, data);
         updateAnswerPlaceholder(placeholder, type, data);
-        storeTraceEvent(userMessage.events, type, data);
+        if (type !== "answer_text_delta") {
+          storeTraceEvent(userMessage.events, type, data);
+        }
         if (type === "completed") {
-          placeholder.root.remove();
           assistant.classList.remove("is-thinking");
           const completedAt = new Date().toISOString();
           session.messages.push({
@@ -1619,25 +1638,39 @@
           });
           session.updatedAt = completedAt;
           await putSession(session);
-          await renderAnswerProgressively(assistant, data.answer);
+          await finalizeStreamedAnswer(assistant, placeholder, data.answer);
           window.setTimeout(() => {
             if (trace.details.classList.contains("is-complete")) trace.details.open = false;
           }, 700);
         }
         if (type === "error") {
+          detachStreamFollowing(placeholder);
+          if (placeholder.renderFrame !== null) {
+            window.cancelAnimationFrame(placeholder.renderFrame);
+            placeholder.renderFrame = null;
+          }
           placeholder.root.remove();
+          placeholder.answerBody.remove();
           assistant.classList.remove("is-thinking");
         }
-        session.updatedAt = new Date().toISOString();
-        await putSession(session);
-        if (type !== "completed") scrollToBottom();
+        if (type !== "answer_text_delta") {
+          session.updatedAt = new Date().toISOString();
+          await putSession(session);
+          if (type !== "completed") scrollToBottom();
+        }
       });
       await loadSessions();
       if (session.messages.some((message) => message.role === "assistant")) {
         await generateTitle(session, question);
       }
     } catch (error) {
+      detachStreamFollowing(placeholder);
+      if (placeholder.renderFrame !== null) {
+        window.cancelAnimationFrame(placeholder.renderFrame);
+        placeholder.renderFrame = null;
+      }
       placeholder.root.remove();
+      placeholder.answerBody.remove();
       assistant.classList.remove("is-thinking");
       appendTrace(trace, "error", { message: error.message });
       storeTraceEvent(userMessage.events, "error", { message: error.message });

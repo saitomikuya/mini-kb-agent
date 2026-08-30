@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-one--container-2496ED?logo=docker&logoColor=white)
 ![No Vector DB](https://img.shields.io/badge/Vector_DB-not_required-2E7D32)
-![Tests](https://img.shields.io/badge/tests-157_passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-164_passed-brightgreen)
 
 [Docker Hub：`saitomikuya/mini-kb-agent`](https://hub.docker.com/r/saitomikuya/mini-kb-agent)
 
@@ -346,7 +346,7 @@ query_router        → 快速、JSON 稳定的模型
 answer_generation   → 能力更强的回答模型
 ```
 
-每个角色都有可编辑的任务提示词。系统提供默认值，只有管理员显式保存后才覆盖默认提示词。
+每个角色都有可编辑的任务提示词和独立的推理强度。系统提供默认值：文档转换与索引生成使用 `low`，查询路由与最终回答跟随模型默认；只有管理员显式保存后才覆盖默认提示词。
 
 ### 支持的 Provider
 

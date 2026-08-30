@@ -5,7 +5,12 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.llm.clients import HttpClientFactory, ModelClient, build_model_client
 from app.llm.prompts import resolved_role_prompts
-from app.llm.types import ModelRole, ModelTestStatus
+from app.llm.types import (
+    DEFAULT_ROLE_REASONING_EFFORTS,
+    ModelRole,
+    ModelTestStatus,
+    ReasoningEffort,
+)
 from app.models.model_config import (
     ModelProfile,
     ModelRoleBinding,
@@ -59,6 +64,9 @@ class ModelRegistry:
         validate_profile_for_role(role, profile)
         api_key = self.cipher.decrypt(profile.provider.encrypted_api_key)
         prompt_setting = self.session.get(ModelRolePromptSetting, role.value)
+        configured_effort = ReasoningEffort(
+            binding.reasoning_effort or DEFAULT_ROLE_REASONING_EFFORTS[role].value
+        )
         return build_model_client(
             profile.provider,
             profile,
@@ -67,6 +75,11 @@ class ModelRegistry:
             role_prompts=resolved_role_prompts(
                 role,
                 prompt_setting.prompts_json if prompt_setting is not None else None,
+            ),
+            role_reasoning_effort=(
+                None
+                if configured_effort is ReasoningEffort.MODEL_DEFAULT
+                else configured_effort.value
             ),
         )
 

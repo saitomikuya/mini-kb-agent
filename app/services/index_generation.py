@@ -319,6 +319,9 @@ class IndexGenerationService:
                 model_requests_total=model_requests_total,
                 model_requests_completed=0,
                 model_cache_hits=batch_cache_hits + document_card_cache_hits,
+                last_completed_document_id=None,
+                last_completed_document_name=None,
+                last_completed_document_parts=None,
             )
             if plans:
                 generated_cards = asyncio.run(
@@ -607,6 +610,11 @@ class IndexGenerationService:
         semaphore = asyncio.Semaphore(INDEX_MODEL_CONCURRENCY)
         documents_completed = initially_completed
         model_requests_completed = 0
+        reasoning_effort = getattr(
+            client,
+            "role_reasoning_effort",
+            INDEX_REASONING_EFFORT,
+        )
         role_prompts = {
             task: prompt_for_client(client, ModelRole.INDEX_GENERATION, task)
             for task in _INDEX_DEFAULT_PROMPTS
@@ -639,7 +647,7 @@ class IndexGenerationService:
                                 ),
                                 json_schema=schema,
                                 max_output_tokens=max_output_tokens,
-                                reasoning_effort=INDEX_REASONING_EFFORT,
+                                reasoning_effort=reasoning_effort,
                             ),
                             heartbeat,
                         )
@@ -787,6 +795,9 @@ class IndexGenerationService:
                 current_document_name=record.relative_path,
                 current_document_parts=len(plan.parts),
                 current_document_batches=len(plan.batches),
+                last_completed_document_id=record.id,
+                last_completed_document_name=record.relative_path,
+                last_completed_document_parts=len(plan.parts),
             )
             heartbeat()
             return record.id, card
@@ -853,12 +864,17 @@ class IndexGenerationService:
             ),
         )
         try:
+            reasoning_effort = getattr(
+                client,
+                "role_reasoning_effort",
+                INDEX_REASONING_EFFORT,
+            )
             generated = asyncio.run(
                 client.generate_json(
                     prompt,
                     json_schema=_card_model_schema(parts),
                     max_output_tokens=INDEX_CARD_MAX_OUTPUT_TOKENS,
-                    reasoning_effort=INDEX_REASONING_EFFORT,
+                    reasoning_effort=reasoning_effort,
                 )
             )
         except Exception as exc:
@@ -1345,7 +1361,14 @@ def _index_model_cache_key(client: ModelClient | None) -> str:
                     client.__class__.__qualname__,
                 )
             ),
-            INDEX_REASONING_EFFORT,
+            str(
+                getattr(
+                    client,
+                    "role_reasoning_effort",
+                    INDEX_REASONING_EFFORT,
+                )
+                or "model_default"
+            ),
             prompt_digest,
         )
     )

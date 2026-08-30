@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ app_name }} · 管理</title>
-    <link rel="stylesheet" href="/static/admin.css?v=20260829-job-recovery-v1">
+    <link rel="stylesheet" href="/static/admin.css?v=20260830-jobs-mobile-v1">
   </head>
   <body>
     <section id="login-view" class="login-view" aria-labelledby="login-title" hidden>
@@ -115,17 +115,19 @@
             </div>
             <span class="poll-note">运行期间每 1 秒刷新</span>
           </div>
-          <div id="current-job" class="current-job empty-state-card">当前没有运行中的任务</div>
-          <div class="table-card">
+          <div class="table-card jobs-table-card">
             <div class="table-title-row">
-              <h3>任务记录</h3>
+              <div class="table-title-copy">
+                <h3>任务列表</h3>
+                <span id="jobs-summary" class="job-list-summary" aria-live="polite">正在读取任务…</span>
+              </div>
               <div class="table-title-actions">
                 <button id="delete-all-jobs" class="button danger compact" type="button" data-action="delete-all-jobs">删除全部记录</button>
                 <button class="button quiet compact" type="button" data-action="refresh-jobs">刷新</button>
               </div>
             </div>
             <div class="table-scroll">
-              <table>
+              <table class="jobs-table">
                 <thead><tr><th>状态</th><th>类型</th><th>成功数 / 总数</th><th>失败数</th><th id="jobs-current-file-heading">当前文件</th><th>开始时间</th><th>耗时</th><th>操作</th></tr></thead>
                 <tbody id="jobs-body"><tr><td class="empty-cell" colspan="8">正在读取任务…</td></tr></tbody>
               </table>
@@ -153,9 +155,9 @@
           </section>
 
           <section class="model-layer" aria-labelledby="roles-title">
-            <div class="layer-heading"><span class="layer-index">C</span><div><h3 id="roles-title">角色与提示词</h3><p>为四个运行角色选择模型，并按需修改后端已支持的任务提示词</p></div></div>
+            <div class="layer-heading"><span class="layer-index">C</span><div><h3 id="roles-title">角色与提示词</h3><p>为每个运行角色分别选择模型与推理强度；任务提示词保持默认即可使用，也可按需展开修改</p></div></div>
             <div id="roles-grid" class="roles-grid"></div>
-            <p class="role-examples">提示词均已提供可直接使用的默认内容；只有展开并保存修改后才会覆盖默认值。</p>
+            <p class="role-examples">转换和索引默认使用低推理强度；路由和回答默认跟随所选模型。调整后只影响该角色，不会改动共享的 Model Profile。</p>
           </section>
         </section>
 
@@ -163,17 +165,17 @@
           <div class="section-heading">
             <div>
               <h2>问答调优</h2>
-              <p class="section-copy">Profile 中的上下文和输出表示模型能力上限；这里控制系统实际使用量，运行时始终取两者较小值。</p>
+              <p class="section-copy">Profile 中的上下文和输出表示模型能力上限；这里控制系统实际使用量。运行时输出上限取 Profile、调优值和实际上下文四分之一中的最小值，为证据保留空间。</p>
             </div>
           </div>
           <form id="tuning-form" class="tuning-form">
             <section class="tuning-card">
               <div class="tuning-card-heading"><div><h3>上下文与回答</h3><p>立即影响新问题；提高数值会增加耗时与费用，不会绕过 Profile 上限。</p></div><span class="effect-badge immediate">立即生效</span></div>
               <div class="tuning-grid">
-                <label class="field"><span>路由实际上下文 <small>推荐 32K–128K</small></span><input name="query_router_context_tokens" type="number" min="4096" max="2000000" step="1024" required></label>
-                <label class="field"><span>路由实际最大输出 <small>推荐 1K–4K</small></span><input name="navigation_default_max_output_tokens" type="number" min="256" max="65536" step="256" required></label>
-                <label class="field"><span>回答实际上下文 <small>推荐 64K–128K</small></span><input name="answer_context_tokens" type="number" min="4096" max="2000000" step="1024" required></label>
-                <label class="field"><span>回答实际最大输出 <small>推荐 4K–8K</small></span><input name="answer_max_output_tokens" type="number" min="256" max="65536" step="256" required></label>
+                <label class="field"><span>路由实际上下文 <small>推荐 32K–128K</small></span><input name="query_router_context_tokens" type="number" min="4096" max="2000000" step="1" required></label>
+                <label class="field"><span>路由实际最大输出 <small>推荐 1K–4K</small></span><input name="navigation_default_max_output_tokens" type="number" min="256" max="128000" step="256" required></label>
+                <label class="field"><span>回答实际上下文 <small>推荐 64K–128K</small></span><input name="answer_context_tokens" type="number" min="4096" max="2000000" step="1" required></label>
+                <label class="field"><span>回答实际最大输出 <small>推荐 4K–8K，最高 128K</small></span><input name="answer_max_output_tokens" type="number" min="256" max="128000" step="256" required></label>
                 <label class="field"><span>回答详细度</span><select name="answer_verbosity"><option value="low">简洁</option><option value="medium">均衡</option><option value="high">详细</option></select></label>
                 <label class="field"><span>上下文安全余量 <small>百分比，推荐 5%</small></span><input name="navigation_context_safety_percent" type="number" min="1" max="25" required></label>
                 <label class="field"><span>root 单次输入上限 <small>推荐 32K</small></span><input name="navigation_root_input_token_cap" type="number" min="1024" max="1000000" step="1024" required></label>
@@ -243,7 +245,7 @@
         </div>
         <p id="upload-selection" class="upload-selection" aria-live="polite">请选择文件或文件夹，系统会自动识别上传类型。</p>
         <p class="form-error" data-upload-error role="alert" hidden></p>
-        <p class="modal-note">支持单文件、多文件和整个文件夹；会自动忽略 .DS_Store、._*、Thumbs.db 等系统文件。已存在的路径不会覆盖，请在文件列表中使用“覆盖”。</p>
+        <p class="modal-note">支持单文件、多文件和整个文件夹；会自动忽略 .DS_Store、._*、Thumbs.db 等系统文件。已存在的路径不会重复上传，请在文件列表中使用“更新”。</p>
         <div class="modal-actions"><button class="button" type="button" data-close-dialog>取消</button><button class="button primary" type="submit">上传</button></div>
       </form>
     </dialog>
@@ -284,11 +286,11 @@
           <label class="field"><span>所属 Provider</span><select name="provider_id" required></select></label>
           <label class="field"><span>配置名称 <small>便于管理员识别</small></span><input name="name" type="text" maxlength="200" placeholder="例如：快速文本模型" required></label>
           <label class="field full-span"><span>模型名称 / Azure Deployment</span><input name="remote_model_name" type="text" maxlength="300" placeholder="例如：gpt-5-mini" required></label>
-          <label class="field"><span>模型上下文上限 <small>按供应商能力填写</small></span><input name="context_window" type="number" min="4096" max="2000000" step="1024" value="32768" required></label>
-          <label class="field"><span>模型输出上限 <small>按供应商能力填写</small></span><input name="max_output_tokens" type="number" min="256" max="65536" step="256" value="4096" required></label>
+          <label class="field"><span>模型上下文上限 <small>按供应商能力填写</small></span><input name="context_window" type="number" min="4096" max="2000000" step="1" value="32768" required></label>
+          <label class="field"><span>模型输出上限 <small>按供应商能力填写</small></span><input name="max_output_tokens" type="number" min="256" max="128000" step="256" value="4096" required></label>
           <label class="check-field full-span"><input name="enabled" type="checkbox" checked><span>启用此 Model Profile</span></label>
         </div>
-        <p class="model-default-note">这里填写供应商公布的模型能力上限。实际调用量由“问答调优”设置，运行时取 Profile 上限与调优值中的较小值。</p>
+        <p class="model-default-note">这里填写供应商公布的模型能力上限；官方 GPT-5.6 Sol/Terra/Luna 的上下文窗口均为 1,050,000，最大输出均为 128,000 tokens。使用兼容供应商时仍以其实际限额为准。</p>
         <p class="form-error" data-form-error role="alert" hidden></p>
         <div class="modal-actions"><button class="button" type="button" data-close-dialog>取消</button><button class="button primary" type="submit">保存 Model Profile</button></div>
       </form>
@@ -337,13 +339,13 @@
     <dialog id="file-progress-dialog" class="modal file-progress-modal">
       <div class="modal-card file-progress-card">
         <div class="modal-heading">
-          <div><p id="file-progress-kicker" class="eyebrow">文件进度</p><h2 id="file-progress-title" class="file-progress-title">当前文件</h2></div>
+          <div class="file-progress-heading-copy"><p id="file-progress-kicker" class="eyebrow">文件进度</p><h2 id="file-progress-title" class="file-progress-title">当前文件</h2></div>
           <button class="icon-close" type="button" data-close-dialog aria-label="关闭">×</button>
         </div>
         <div class="file-progress-overview">
-          <div><span>状态</span><div id="file-progress-status"><span class="status-pill info">准备中</span></div></div>
-          <div><span>当前阶段</span><strong id="file-progress-phase">正在读取进度…</strong></div>
-          <div><span>总体进度</span><strong id="file-progress-percent">0%</strong></div>
+          <div class="file-progress-status-card"><span>状态</span><div id="file-progress-status"><span class="status-pill info">准备中</span></div></div>
+          <div class="file-progress-phase-card"><span>当前阶段</span><strong id="file-progress-phase">正在读取进度…</strong></div>
+          <div class="file-progress-percent-card"><span>总体进度</span><strong id="file-progress-percent">0%</strong></div>
         </div>
         <div class="file-progress-track" role="progressbar" aria-label="当前文件进度"><div id="file-progress-fill" class="file-progress-fill"></div></div>
         <p id="file-progress-updated" class="file-progress-updated">等待 Worker 上报</p>
@@ -355,6 +357,6 @@
 
     <input id="replace-input" type="file" hidden>
     <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
-    <script src="/static/admin.js?v=20260829-job-recovery-v1" defer></script>
+    <script src="/static/admin.js?v=20260830-jobs-mobile-v1" defer></script>
   </body>
 </html>

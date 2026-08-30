@@ -162,6 +162,41 @@ def test_four_roles_can_bind_different_profiles(client: TestClient) -> None:
         role: profile["id"]
         for role, profile in zip(roles, profiles, strict=True)
     }
+    assert {item["role"]: item["reasoning_effort"] for item in bindings} == {
+        "document_conversion": "low",
+        "index_generation": "low",
+        "query_router": "model_default",
+        "answer_generation": "model_default",
+    }
+
+
+def test_role_reasoning_effort_can_override_the_role_default(
+    client: TestClient,
+) -> None:
+    provider = _create_provider(client)
+    profile = _create_profile(client, provider["id"], name="reasoning")
+    _mark_capable(client, [profile["id"]])
+
+    updated = client.put(
+        "/api/admin/model-roles/answer_generation",
+        json={"model_profile_id": profile["id"], "reasoning_effort": "high"},
+    )
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["reasoning_effort"] == "high"
+    assert updated.json()["default_reasoning_effort"] == "model_default"
+    with client.app.state.session_factory() as session:
+        resolved = ModelRegistry(
+            session,
+            client.app.state.api_key_cipher,
+        ).get_for_role(ModelRole.ANSWER_GENERATION)
+        assert resolved.role_reasoning_effort == "high"
+
+    invalid = client.put(
+        "/api/admin/model-roles/answer_generation",
+        json={"model_profile_id": profile["id"], "reasoning_effort": "extreme"},
+    )
+    assert invalid.status_code == 422
 
 
 def test_four_roles_can_share_one_profile(client: TestClient) -> None:
@@ -230,6 +265,14 @@ def test_role_enum_is_validated_and_unconfigured_startup_is_allowed(
     assert bindings.status_code == 200
     assert len(bindings.json()) == 4
     assert all(item["model_profile_id"] is None for item in bindings.json())
+    assert {
+        item["role"]: item["reasoning_effort"] for item in bindings.json()
+    } == {
+        "document_conversion": "low",
+        "index_generation": "low",
+        "query_router": "model_default",
+        "answer_generation": "model_default",
+    }
 
     invalid = client.put(
         "/api/admin/model-roles/default_model",
@@ -265,6 +308,33 @@ def test_simplified_profile_creation_uses_compatibility_defaults(
     assert profile["reasoning_effort"] is None
     assert profile["protocol_override"] is None
     assert profile["extra_request_json"] == {}
+
+
+def test_profile_accepts_gpt_5_6_official_token_limits(
+    client: TestClient,
+) -> None:
+    provider = _create_provider(client)
+    response = client.post(
+        "/api/admin/model-profiles",
+        json={
+            "provider_id": provider["id"],
+            "name": "gpt-5.6-sol",
+            "remote_model_name": "gpt-5.6-sol",
+            "context_window": 1_050_000,
+            "max_output_tokens": 128_000,
+            "enabled": True,
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["context_window"] == 1_050_000
+    assert response.json()["max_output_tokens"] == 128_000
+
+    too_large = client.put(
+        f"/api/admin/model-profiles/{response.json()['id']}",
+        json={"max_output_tokens": 128_001},
+    )
+    assert too_large.status_code == 422
 
 
 def test_supported_role_task_prompts_have_defaults_and_can_be_updated_unbound(

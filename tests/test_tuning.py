@@ -34,8 +34,8 @@ def test_admin_can_persist_apply_and_reset_tuning(tmp_path) -> None:
         payload.update(
             {
                 "query_router_context_tokens": 65_536,
-                "answer_context_tokens": 98_304,
-                "answer_max_output_tokens": 6_144,
+                "answer_context_tokens": 1_050_000,
+                "answer_max_output_tokens": 128_000,
                 "navigation_max_selected_parts": 20,
                 "lexical_fallback_parts": 10,
                 "answer_verbosity": "high",
@@ -49,8 +49,8 @@ def test_admin_can_persist_apply_and_reset_tuning(tmp_path) -> None:
         with application.state.session_factory() as session:
             active = effective_settings(session, settings)
         assert active.query_router_context_tokens == 65_536
-        assert active.answer_context_tokens == 98_304
-        assert active.answer_max_output_tokens == 6_144
+        assert active.answer_context_tokens == 1_050_000
+        assert active.answer_max_output_tokens == 128_000
         assert active.navigation_max_selected_parts == 20
         assert active.answer_verbosity == "high"
 

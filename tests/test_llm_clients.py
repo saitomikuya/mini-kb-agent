@@ -152,7 +152,9 @@ def test_responses_stream_forwards_reasoning_summary_and_json_output() -> None:
         (
             "reasoning_summary",
             {"summary": "先核对证据，再组织答案。"},
-        )
+        ),
+        ("output_delta", {"delta": '{"ok":'}),
+        ("output_delta", {"delta": "true}"}),
     ]
 
 

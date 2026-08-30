@@ -201,6 +201,8 @@ class ProgressAnswering(FakeAnswering):
             "reasoning_summary",
             {"summary": "先核对两个来源，再组织有引用的答案。"},
         )
+        await on_progress("answer_text_delta", {"delta": "产品A的规格值"})
+        await on_progress("answer_text_delta", {"delta": "存在两个来源值，请核对。"})
         await on_progress("output_progress", {"generated_characters": 360})
         return _answer()
 
@@ -338,7 +340,9 @@ def test_root_directly_renders_public_chat_login_and_local_history_ui(
     assert "source-action-icon" in chat_script.text
     assert "文件目录：" in chat_script.text
     assert "list.start = start" in chat_script.text
-    assert "renderAnswerProgressively" in chat_script.text
+    assert "queueAnswerTextDelta" in chat_script.text
+    assert "finalizeStreamedAnswer" in chat_script.text
+    assert 'type !== "answer_text_delta"' in chat_script.text
     assert "window.requestAnimationFrame" in chat_script.text
     assert 'classList.remove("is-streaming")' in chat_script.text
     assert "file.view_url" not in chat_script.text
@@ -417,9 +421,15 @@ def test_sse_forwards_safe_model_progress_without_raw_reasoning(tmp_path: Path) 
         event_types = [event_type for event_type, _data in events]
 
         summary_index = event_types.index("answer_reasoning_summary")
+        text_indexes = [
+            index
+            for index, event_type in enumerate(event_types)
+            if event_type == "answer_text_delta"
+        ]
         output_index = event_types.index("answer_output_progress")
         assert summary_index > event_types.index("answer_generating")
-        assert output_index > summary_index
+        assert text_indexes and min(text_indexes) > summary_index
+        assert output_index > max(text_indexes)
         assert events[summary_index][1] == {
             "type": "answer_reasoning_summary",
             "message": "模型正在整理回答要点",
@@ -427,6 +437,10 @@ def test_sse_forwards_safe_model_progress_without_raw_reasoning(tmp_path: Path) 
             "source": "model",
         }
         assert events[output_index][1]["generated_characters"] == 360
+        assert "".join(events[index][1]["delta"] for index in text_indexes) == (
+            "产品A的规格值存在两个来源值，请核对。"
+        )
+        assert all(events[index][1]["source"] == "model" for index in text_indexes)
         assert "raw_reasoning" not in response.text
         assert event_types[-1] == "completed"
     finally:

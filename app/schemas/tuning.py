@@ -5,14 +5,22 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.config import MAX_CONFIGURABLE_OUTPUT_TOKENS
+
 
 class KnowledgeTuningValues(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query_router_context_tokens: int = Field(ge=4_096, le=2_000_000)
-    navigation_default_max_output_tokens: int = Field(ge=256, le=65_536)
+    navigation_default_max_output_tokens: int = Field(
+        ge=256,
+        le=MAX_CONFIGURABLE_OUTPUT_TOKENS,
+    )
     answer_context_tokens: int = Field(ge=4_096, le=2_000_000)
-    answer_max_output_tokens: int = Field(ge=256, le=65_536)
+    answer_max_output_tokens: int = Field(
+        ge=256,
+        le=MAX_CONFIGURABLE_OUTPUT_TOKENS,
+    )
     navigation_root_input_token_cap: int = Field(ge=1_024, le=1_000_000)
     navigation_folder_input_token_cap: int = Field(ge=1_024, le=1_000_000)
     navigation_context_safety_percent: int = Field(ge=1, le=25)

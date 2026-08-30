@@ -8,8 +8,16 @@
     { id: "query_router", name: "查询路由模型", requirement: "速度快 · JSON 稳定", hint: "推荐速度快、结构化输出稳定的模型。" },
     { id: "answer_generation", name: "最终回答模型", requirement: "能力较强 · 推理", hint: "推荐能力较强的推理模型，只根据已经选中的证据回答。" },
   ];
+  const REASONING_EFFORT_OPTIONS = [
+    { value: "model_default", label: "跟随模型默认" },
+    { value: "minimal", label: "极低（minimal）" },
+    { value: "low", label: "低（low）" },
+    { value: "medium", label: "中（medium）" },
+    { value: "high", label: "高（high）" },
+    { value: "xhigh", label: "极高（xhigh）" },
+  ];
   const state = {
-    files: [], jobs: [], currentJob: null, providers: [], profiles: [], roles: [], index: null, tuning: null,
+    files: [], jobs: [], providers: [], profiles: [], roles: [], index: null, tuning: null,
     pollTimer: null, pollBusy: false, bootstrapped: false, replaceFileId: null,
     selectedFileIds: new Set(), currentFileFolderPath: "", currentFileIds: new Set(), fileBulkBusy: false,
     jobDetail: null, jobItemStatus: null,
@@ -99,6 +107,11 @@
     let unit = units[0];
     for (let index = 1; index < units.length && size >= 1024; index += 1) { size /= 1024; unit = units[index]; }
     return `${size >= 10 ? size.toFixed(1) : size.toFixed(2)} ${unit}`;
+  };
+  const fileExtensionLabel = (file) => {
+    const filename = String(file.filename || "");
+    const inferred = filename.includes(".") ? filename.split(".").pop() : "";
+    return String(file.extension || inferred || "文件").replace(/^\./, "").slice(0, 5).toUpperCase() || "文件";
   };
   const formatDuration = (job) => {
     if (!job.started_at) return "—";
@@ -273,7 +286,7 @@
     selectionCell.append(selection);
     const nameCell = node("td", "file-tree-name-cell");
     const entry = node("div", "file-tree-entry");
-    const icon = node("span", "file-tree-file-icon");
+    const icon = node("span", "file-library-icon file", fileExtensionLabel(file));
     icon.setAttribute("aria-hidden", "true");
     entry.append(icon, node("strong", "file-name", file.filename));
     nameCell.append(entry);
@@ -286,7 +299,8 @@
     } else { errorCell.textContent = "—"; errorCell.className = "muted-text"; }
     const actionsCell = node("td");
     const actions = node("div", "row-actions");
-    const replace = button("覆盖", "replace-file");
+    const replace = button("更新", "replace-file");
+    replace.title = "用新文件更新内容，保留当前路径";
     const remove = button("删除", "delete-file", "danger");
     const conversionActive = ["QUEUED", "CONVERTING"].includes(file.conversion_status);
     const convert = button(conversionActive ? "转换中" : file.conversion_status === "READY" ? "已转换" : "转换", "convert-file");
@@ -319,7 +333,7 @@
     open.dataset.action = "open-file-folder";
     open.dataset.folderPath = folder.path;
     open.setAttribute("aria-label", `打开文件夹 ${folder.name}`);
-    const icon = node("span", "file-tree-folder-icon");
+    const icon = node("span", "file-library-icon folder");
     icon.setAttribute("aria-hidden", "true");
     open.append(icon, node("strong", "file-folder-name", folder.name));
     nameCell.append(open);
@@ -328,17 +342,15 @@
     meta.colSpan = 6;
     const actionsCell = node("td");
     const actions = node("div", "row-actions");
-    const openAction = button("打开", "open-file-folder");
     const convertAction = button(convertibleFiles.length ? `转换文件夹（${convertibleFiles.length}）` : "无需转换", "convert-file-folder");
     const deleteAction = button("删除文件夹", "delete-file-folder", "danger");
-    openAction.dataset.folderPath = folder.path;
     convertAction.dataset.folderPath = folder.path;
     deleteAction.dataset.folderPath = folder.path;
     convertAction.disabled = !convertibleFiles.length;
     convertAction.title = convertibleFiles.length ? "转换该文件夹及所有子文件夹中尚待处理的文件" : "该文件夹中没有需要转换的文件";
     deleteAction.disabled = !deletableFiles.length;
     deleteAction.title = deletableFiles.length ? "删除整个文件夹及其磁盘内容" : "该文件夹仅包含已标记缺失的索引记录";
-    actions.append(openAction, convertAction, deleteAction);
+    actions.append(convertAction, deleteAction);
     actionsCell.append(actions);
     row.append(selectionCell, nameCell, meta, actionsCell);
     body.append(row);
@@ -526,7 +538,7 @@
     const data = new FormData(); data.append("file", file);
     try {
       await api(`/api/admin/files/${fileId}/replace`, { method: "PUT", body: data });
-      await loadFiles(); toast("源文件已原位覆盖，路径保持不变");
+      await loadFiles(); toast("源文件已更新，路径保持不变");
     } catch (error) { toast(error.message, "error"); }
     finally { state.replaceFileId = null; replaceInput.value = ""; }
   };
@@ -639,12 +651,12 @@
   }, "读取中…").catch((error) => toast(error.message, "error"));
 
   const loadJobs = async () => {
-    const [jobs, current] = await Promise.all([jsonApi("/api/admin/jobs"), jsonApi("/api/admin/jobs/current")]);
-    state.jobs = jobs; state.currentJob = current; renderJobs(); syncPolling();
+    state.jobs = await jsonApi("/api/admin/jobs"); renderJobs(); syncPolling();
   };
   const jobTypeLabel = (type) => ({ document_conversion: "文档转换", index_generation: "索引生成", test_background: "后台测试" }[type] || type);
   const effectiveJobStatus = (job) => job.control_state === "PAUSED" ? "PAUSED" : job.control_state === "STOPPED" ? "STOPPED" : job.status;
   const isJobTerminal = (job) => ["COMPLETED", "FAILED"].includes(job.status);
+  const isJobActive = (job) => ACTIVE_JOB_STATUSES.has(job.status) && job.control_state !== "STOPPED";
   const jobManagementActions = (job) => {
     const actions = node("div", "job-management-actions");
     const add = (label, action, extraClass = "") => {
@@ -680,12 +692,34 @@
     summary.append(jobCountButton(job, "COMPLETED", job.completed_items), node("span", "", `/ ${job.total_items}`));
     return summary;
   };
+  const jobProgressBar = (job) => {
+    const handled = job.completed_items + job.failed_items;
+    const percentage = job.total_items ? Math.min(100, handled / job.total_items * 100) : 0;
+    const track = node("div", "job-progress-track");
+    track.setAttribute("role", "progressbar");
+    track.setAttribute("aria-label", `任务 #${job.id} 进度`);
+    track.setAttribute("aria-valuemin", "0");
+    track.setAttribute("aria-valuemax", "100");
+    track.setAttribute("aria-valuenow", String(Math.round(percentage)));
+    const progress = node("div", "job-progress-fill");
+    progress.style.width = `${percentage}%`;
+    track.append(progress);
+    return track;
+  };
+  const jobTableCell = (label, className = "", text = "") => {
+    const cell = node("td", className, text);
+    cell.dataset.label = label;
+    return cell;
+  };
   const renderJobs = () => {
-    renderCurrentJob();
     const deleteAllControl = $("#delete-all-jobs");
-    const hasActiveJobs = state.jobs.some(
-      (job) => ACTIVE_JOB_STATUSES.has(job.status) && job.control_state !== "STOPPED",
-    );
+    const activeJobCount = state.jobs.filter(isJobActive).length;
+    const hasActiveJobs = activeJobCount > 0;
+    $("#jobs-summary").textContent = !state.jobs.length
+      ? "暂无任务"
+      : hasActiveJobs
+        ? `${activeJobCount} 个任务处理中 · 共 ${state.jobs.length} 个`
+        : `当前无运行任务 · 共 ${state.jobs.length} 个`;
     deleteAllControl.disabled = !state.jobs.length || hasActiveJobs;
     deleteAllControl.title = !state.jobs.length
       ? "当前没有任务记录"
@@ -693,55 +727,42 @@
         ? "请先停止正在运行的任务"
         : "删除全部任务记录";
     const body = $("#jobs-body"); body.replaceChildren();
-    const showCurrentFileColumn = Boolean(
-      state.currentJob?.job_type === "document_conversion"
-      && state.currentJob.current_file_id
+    const showCurrentFileColumn = state.jobs.some(
+      (job) => isJobActive(job) && job.job_type === "document_conversion" && job.current_file_id,
     );
     $("#jobs-current-file-heading").hidden = !showCurrentFileColumn;
     if (!state.jobs.length) {
       const row = node("tr"); const cell = node("td", "empty-cell", "暂无后台任务。"); cell.colSpan = showCurrentFileColumn ? 8 : 7; row.append(cell); body.append(row); return;
     }
-    state.jobs.forEach((job) => {
-      const row = node("tr"); row.dataset.jobId = String(job.id); const statusCell = node("td"); statusCell.append(pill(effectiveJobStatus(job)));
-      const completedCell = node("td"); completedCell.append(jobProgressCount(job));
-      const failedCell = node("td"); failedCell.append(jobCountButton(job, "FAILED", job.failed_items, "failed"));
+    const orderedJobs = [...state.jobs].sort((left, right) => Number(isJobActive(right)) - Number(isJobActive(left)));
+    orderedJobs.forEach((job) => {
+      const row = node("tr");
+      row.dataset.jobId = String(job.id);
+      row.setAttribute("aria-label", `${jobTypeLabel(job.job_type)}任务 #${job.id}`);
+      row.classList.toggle("job-row-active", isJobActive(job));
+      const statusCell = jobTableCell("状态", "job-card-status"); statusCell.append(pill(effectiveJobStatus(job)));
+      const completedCell = jobTableCell("成功 / 总数", "job-progress-cell job-card-progress"); completedCell.append(jobProgressCount(job));
+      if (isJobActive(job)) completedCell.append(jobProgressBar(job));
+      const failedCell = jobTableCell("失败数", "job-card-failed"); failedCell.append(jobCountButton(job, "FAILED", job.failed_items, "failed"));
       const cells = [
-        statusCell, node("td", "", jobTypeLabel(job.job_type)), completedCell,
+        statusCell, jobTableCell("类型", "job-card-type", jobTypeLabel(job.job_type)), completedCell,
         failedCell,
       ];
       if (showCurrentFileColumn) {
-        const currentFileCell = node("td");
+        const currentFileCell = jobTableCell("当前文件", "job-card-current");
         currentFileCell.append(currentFileProgressButton(job));
         cells.push(currentFileCell);
       }
+      const actionsCell = jobTableCell("操作", "job-actions-cell");
       cells.push(
-        node("td", "muted-text", formatDate(job.started_at)), node("td", "muted-text", formatDuration(job)),
-        node("td"),
+        jobTableCell("开始时间", "muted-text job-card-start", formatDate(job.started_at)),
+        jobTableCell("耗时", "muted-text job-card-duration", formatDuration(job)),
+        actionsCell,
       );
       row.append(...cells);
-      row.lastElementChild.append(jobManagementActions(job));
+      actionsCell.append(jobManagementActions(job));
       body.append(row);
     });
-  };
-  const renderCurrentJob = () => {
-    const container = $("#current-job"); const job = state.currentJob; container.replaceChildren();
-    if (!job) { container.className = "current-job empty-state-card"; container.textContent = "当前没有运行中的任务"; return; }
-    container.className = "current-job current-job-card";
-    const hasCurrentFile = job.job_type === "document_conversion" && job.current_file_id;
-    const row = node("div", `job-main-row${hasCurrentFile ? "" : " without-current-file"}`); const primary = node("div", "job-primary");
-    primary.append(node("small", "", "当前任务"), node("strong", "", jobTypeLabel(job.job_type)), pill(effectiveJobStatus(job)));
-    const stat = (label, value) => {
-      const item = node("div", "job-stat");
-      item.append(node("span", "", label), value instanceof Element ? value : node("strong", "", value));
-      return item;
-    };
-    row.append(primary, stat("成功 / 总数", jobProgressCount(job)), stat("失败", jobCountButton(job, "FAILED", job.failed_items, "failed")));
-    if (hasCurrentFile) row.append(stat("当前文件", currentFileProgressButton(job)));
-    row.append(stat("耗时", formatDuration(job)));
-    const track = node("div", "progress-track"); const progress = node("div", "progress-fill");
-    const handled = job.completed_items + job.failed_items; progress.style.width = `${job.total_items ? Math.min(100, handled / job.total_items * 100) : 0}%`; track.append(progress);
-    const actions = jobManagementActions(job); actions.classList.add("job-card-actions");
-    container.append(row, track, actions); if (job.error) container.append(node("p", "job-error", job.error));
   };
   const jobItemFile = (item) => state.files.find((file) => file.id === item.source_file_id);
   const progressPhaseLabel = (phase) => ({
@@ -784,7 +805,8 @@
       add("索引代数", progress.generation_number, ""); add("文档总数", progress.total_documents, " 个");
       add("需更新卡片", progress.documents_to_refresh, " 个"); add("复用文档卡片", progress.documents_reused, " 个");
       add("断点卡片命中", progress.document_card_cache_hits, " 个"); add("已完成文档", progress.documents_completed, " 个");
-      addText("最近处理文档", progress.current_document_name); add("该文档分片", progress.current_document_parts, " 个");
+      addText("最近完成文档", progress.last_completed_document_name || progress.current_document_name);
+      add("该文档分片", progress.last_completed_document_parts ?? progress.current_document_parts, " 个");
       add("模型请求", progress.model_requests_total, " 次"); add("已完成模型请求", progress.model_requests_completed, " 次");
       add("模型缓存命中", progress.model_cache_hits, " 个"); add("文件夹总数", progress.total_folders, " 个");
       add("复用文件夹", progress.folders_reused, " 个"); add("重建文件夹", progress.folders_rebuilt, " 个");
@@ -833,7 +855,7 @@
     const file = state.files.find((candidate) => candidate.id === state.progressFileId);
     $("#file-progress-kicker").textContent = `${jobTypeLabel(detail.job_type)} · 任务 #${detail.id}`;
     $("#file-progress-title").textContent = detail.job_type === "index_generation"
-      ? (progress?.current_document_name || `索引任务 #${detail.id}`)
+      ? (progress?.last_completed_document_name || progress?.current_document_name || `索引任务 #${detail.id}`)
       : (file?.relative_path || `文件 #${state.progressFileId}`);
     $("#file-progress-status").replaceChildren(pill(item?.status || "PENDING"));
     $("#file-progress-phase").textContent = progressPhaseLabel(progress?.phase);
@@ -845,7 +867,8 @@
     const entries = progressMetrics(progress || {});
     if (!entries.length) metrics.append(node("p", "file-progress-empty", "正在等待第一次进度更新…"));
     else entries.forEach(([label, value]) => {
-      const metric = node("div", "file-progress-metric"); metric.append(node("span", "", label), node("strong", "", value)); metrics.append(metric);
+      const metric = node("div", `file-progress-metric${label === "最近完成文档" ? " wide" : ""}`);
+      metric.append(node("span", "", label), node("strong", "", value)); metrics.append(metric);
     });
     $("#file-progress-note").textContent = item?.error ? `错误：${item.error}` : progressNote(progress);
     $("#file-progress-updated").textContent = progress?.updated_at ? `更新于 ${formatDate(progress.updated_at)}` : "等待 Worker 上报";
@@ -983,7 +1006,7 @@
     }, "删除中…").catch((error) => toast(error.message, "error"));
   };
   const jobStarted = async (job, message) => {
-    state.currentJob = ACTIVE_JOB_STATUSES.has(job.status) && job.control_state !== "STOPPED" ? job : null; toast(message); await Promise.all([loadJobs(), loadFiles()]);
+    toast(message); await Promise.all([loadJobs(), loadFiles()]);
   };
   const syncPolling = () => {
     const needsPolling = state.jobs.some((job) => ACTIVE_JOB_STATUSES.has(job.status) && (job.control_state === "ACTIVE" || job.status === "RUNNING"));
@@ -1068,7 +1091,7 @@
       const roleRecord = roleRecords.get(definition.id); const card = node("article", "role-card"); card.dataset.roleId = definition.id;
       const header = node("div", "role-card-header"); const title = node("div");
       title.append(node("h4", "", definition.name), node("p", "role-id", definition.id)); header.append(title, node("span", "status-pill info", definition.requirement));
-      const select = node("select"); select.dataset.role = definition.id; select.setAttribute("aria-label", `${definition.name} Model Profile`); select.append(new Option("未绑定", ""));
+      const select = node("select"); select.dataset.role = definition.id; select.dataset.roleConfig = "model"; select.setAttribute("aria-label", `${definition.name} Model Profile`); select.append(new Option("未绑定", ""));
       const currentId = roleRecord?.model_profile_id;
       state.profiles.forEach((profile) => {
         const provider = state.providers.find((item) => item.id === profile.provider_id);
@@ -1076,25 +1099,40 @@
         option.disabled = !isProfileCompatible(profile, definition.id) && currentId !== profile.id; select.append(option);
       });
       select.value = currentId === null || currentId === undefined ? "" : String(currentId);
+      const effortSelect = node("select"); effortSelect.dataset.role = definition.id; effortSelect.dataset.roleConfig = "reasoning"; effortSelect.setAttribute("aria-label", `${definition.name}推理强度`);
+      REASONING_EFFORT_OPTIONS.forEach((option) => effortSelect.append(new Option(option.label, option.value)));
+      effortSelect.value = roleRecord?.reasoning_effort || roleRecord?.default_reasoning_effort || "model_default";
+      effortSelect.disabled = !currentId;
+      const configGrid = node("div", "role-config-grid");
+      const modelField = node("label", "role-config-field"); modelField.append(node("span", "", "使用模型"), select);
+      const effortField = node("label", "role-config-field"); effortField.append(node("span", "", "推理强度"), effortSelect);
+      configGrid.append(modelField, effortField);
       const promptTasks = roleRecord?.prompt_tasks || [];
+      const customizedPromptCount = promptTasks.filter((task) => task.prompt !== task.default_prompt).length;
       const promptDetails = node("details", "role-prompt-details");
       const summary = node("summary", "role-prompt-summary");
-      summary.append(node("span", "", `任务提示词（${promptTasks.length}）`), node("small", "", "已提供默认值，可选修改"));
+      summary.append(
+        node("span", "", `任务提示词（${promptTasks.length}）`),
+        node("small", customizedPromptCount ? "customized" : "", customizedPromptCount ? `${customizedPromptCount} 项已修改` : "当前使用默认值"),
+      );
       promptDetails.append(summary);
       const promptList = node("div", "role-prompt-list");
       promptTasks.forEach((task) => {
-        const field = node("label", "role-prompt-field");
-        const labelRow = node("span", "role-prompt-label");
-        labelRow.append(node("strong", "", task.name), node("code", "", task.task));
+        const field = node("details", "role-prompt-field");
+        const labelRow = node("summary", "role-prompt-label");
+        const promptTitle = node("span", "role-prompt-title");
+        promptTitle.append(node("strong", "", task.name), node("small", "", task.description));
+        labelRow.append(promptTitle, node("code", "", task.task));
         const textarea = node("textarea"); textarea.dataset.rolePrompt = task.task; textarea.dataset.defaultPrompt = task.default_prompt;
+        textarea.setAttribute("aria-label", `${definition.name}：${task.name}`);
         textarea.value = task.prompt; textarea.rows = Math.min(9, Math.max(5, Math.ceil(task.prompt.length / 88))); textarea.spellcheck = false;
-        field.append(labelRow, node("small", "", task.description), textarea); promptList.append(field);
+        field.append(labelRow, textarea); promptList.append(field);
       });
       const promptActions = node("div", "role-prompt-actions");
       const reset = button("恢复本角色默认值", "reset-role-prompts"); reset.dataset.role = definition.id;
       const save = button("保存提示词", "save-role-prompts", "primary"); save.dataset.role = definition.id;
       promptActions.append(reset, save); promptDetails.append(promptList, promptActions);
-      card.append(header, node("p", "role-hint", definition.hint), select, promptDetails); grid.append(card);
+      card.append(header, node("p", "role-hint", definition.hint), configGrid, promptDetails); grid.append(card);
     });
   };
   const populateProfileProviderOptions = () => {
@@ -1177,13 +1215,28 @@
     const summary = [`Text ${result.supports_text ? "✓" : "×"}`, `Vision ${result.supports_vision ? "✓" : "×"}`, `Structured Output ${result.supports_structured_output ? "✓" : "回退"}`].join(" · ");
     toast(`模型测试${statusLabel(result.status)}，${result.latency_ms} ms；${summary}`, result.status === "failed" ? "error" : "success");
   }, "测试中…").catch((error) => toast(error.message, "error"));
-  const bindRole = async (roleId, profileId, select) => {
-    select.disabled = true;
+  const bindRole = async (roleId) => {
+    const card = $(`[data-role-id="${roleId}"]`, $("#roles-grid"));
+    const modelSelect = $('select[data-role-config="model"]', card);
+    const effortSelect = $('select[data-role-config="reasoning"]', card);
+    const profileId = modelSelect.value;
+    modelSelect.disabled = true; effortSelect.disabled = true;
     try {
-      await jsonApi(`/api/admin/model-roles/${roleId}`, { method: "PUT", body: JSON.stringify({ model_profile_id: profileId ? Number(profileId) : null }) });
+      await jsonApi(`/api/admin/model-roles/${roleId}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          model_profile_id: profileId ? Number(profileId) : null,
+          reasoning_effort: effortSelect.value,
+        }),
+      });
       await loadModels(); toast(`${ROLE_DEFINITIONS.find((role) => role.id === roleId)?.name || roleId}已保存`);
     } catch (error) { await loadModels().catch(() => {}); toast(error.message, "error"); }
-    finally { select.disabled = false; }
+    finally {
+      if (card?.isConnected) {
+        modelSelect.disabled = false;
+        effortSelect.disabled = !modelSelect.value;
+      }
+    }
   };
   const resetRolePrompts = (roleId) => {
     const card = $(`[data-role-id="${roleId}"]`, $("#roles-grid"));
@@ -1459,7 +1512,7 @@
     updateFileSelection();
   });
   $("#roles-grid").addEventListener("change", (event) => {
-    const select = event.target.closest("select[data-role]"); if (select) bindRole(select.dataset.role, select.value, select);
+    const select = event.target.closest("select[data-role-config]"); if (select) bindRole(select.dataset.role);
   });
   document.addEventListener("click", (event) => {
     const control = event.target.closest("[data-action]"); if (!control || control.tagName === "A") return;

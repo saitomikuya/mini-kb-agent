@@ -36,6 +36,160 @@ _ANSWER_MODEL_SCHEMA = AnswerModelOutput.model_json_schema()
 ANSWER_SYSTEM_PROMPT = default_role_prompts(ModelRole.ANSWER_GENERATION)[
     "grounded_answer"
 ]
+_JSON_SIMPLE_ESCAPES = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+}
+
+
+class _StreamingJSONStringField:
+    """Incrementally decode one JSON string field without exposing its envelope."""
+
+    def __init__(self, field_name: str) -> None:
+        self._needle = json.dumps(field_name, ensure_ascii=True)
+        self._search_tail = ""
+        self._state = "key"
+        self._escaped = False
+        self._unicode_digits: str | None = None
+        self._pending_high_surrogate: int | None = None
+        self._failed = False
+
+    def feed(self, chunk: str) -> str:
+        if self._failed or self._state == "done" or not chunk:
+            return ""
+
+        remaining = chunk
+        if self._state == "key":
+            searchable = f"{self._search_tail}{remaining}"
+            position = searchable.find(self._needle)
+            if position < 0:
+                overlap = max(0, len(self._needle) - 1)
+                self._search_tail = searchable[-overlap:] if overlap else ""
+                return ""
+            remaining = searchable[position + len(self._needle) :]
+            self._search_tail = ""
+            self._state = "colon"
+
+        emitted: list[str] = []
+        for character in remaining:
+            if self._state == "colon":
+                if character.isspace():
+                    continue
+                if character != ":":
+                    self._failed = True
+                    break
+                self._state = "value"
+                continue
+
+            if self._state == "value":
+                if character.isspace():
+                    continue
+                if character != '"':
+                    self._failed = True
+                    break
+                self._state = "string"
+                continue
+
+            if self._state != "string":
+                break
+
+            if self._unicode_digits is not None:
+                if character not in "0123456789abcdefABCDEF":
+                    self._failed = True
+                    break
+                self._unicode_digits += character
+                if len(self._unicode_digits) == 4:
+                    decoded = self._decode_code_unit(int(self._unicode_digits, 16))
+                    self._unicode_digits = None
+                    if decoded is None:
+                        if self._failed:
+                            break
+                    else:
+                        emitted.append(decoded)
+                continue
+
+            if self._escaped:
+                self._escaped = False
+                if character == "u":
+                    self._unicode_digits = ""
+                    continue
+                decoded = _JSON_SIMPLE_ESCAPES.get(character)
+                if decoded is None:
+                    self._failed = True
+                    break
+                if self._pending_high_surrogate is not None:
+                    self._failed = True
+                    break
+                emitted.append(decoded)
+                continue
+
+            if character == "\\":
+                self._escaped = True
+            elif character == '"':
+                if self._pending_high_surrogate is not None:
+                    self._failed = True
+                    break
+                self._state = "done"
+                break
+            elif ord(character) < 0x20 or self._pending_high_surrogate is not None:
+                self._failed = True
+                break
+            else:
+                emitted.append(character)
+
+        return "".join(emitted)
+
+    def _decode_code_unit(self, value: int) -> str | None:
+        if 0xD800 <= value <= 0xDBFF:
+            if self._pending_high_surrogate is not None:
+                self._failed = True
+            else:
+                self._pending_high_surrogate = value
+            return None
+        if 0xDC00 <= value <= 0xDFFF:
+            if self._pending_high_surrogate is None:
+                self._failed = True
+                return None
+            high = self._pending_high_surrogate
+            self._pending_high_surrogate = None
+            codepoint = 0x10000 + ((high - 0xD800) << 10) + (value - 0xDC00)
+            return chr(codepoint)
+        if self._pending_high_surrogate is not None:
+            self._failed = True
+            return None
+        return chr(value)
+
+
+class _AnswerMarkdownPublisher:
+    """Coalesce decoded Markdown while publishing the first visible text promptly."""
+
+    def __init__(self) -> None:
+        self._extractor = _StreamingJSONStringField("answer_markdown")
+        self._pending = ""
+        self._published = False
+
+    def feed(self, raw_delta: str) -> str:
+        decoded = self._extractor.feed(raw_delta)
+        if not decoded:
+            return ""
+        self._pending += decoded
+        if not self._published or len(self._pending) >= 48 or "\n" in decoded:
+            return self.flush()
+        return ""
+
+    def flush(self) -> str:
+        if not self._pending:
+            return ""
+        published = self._pending
+        self._pending = ""
+        self._published = True
+        return published
 
 
 class AnswerGenerationError(RuntimeError):
@@ -136,11 +290,36 @@ class AnswerGenerationService:
         }
         streaming_generation = getattr(client, "generate_json_stream", None)
         if on_progress is not None and callable(streaming_generation):
+            markdown_publisher = _AnswerMarkdownPublisher()
+
+            async def publish_safe_progress(
+                progress_type: str,
+                progress_data: Mapping[str, Any],
+            ) -> None:
+                if progress_type == "output_delta":
+                    raw_delta = progress_data.get("delta")
+                    if not isinstance(raw_delta, str):
+                        return
+                    answer_delta = markdown_publisher.feed(raw_delta)
+                    if answer_delta:
+                        await on_progress(
+                            "answer_text_delta",
+                            {"delta": answer_delta},
+                        )
+                    return
+                await on_progress(progress_type, progress_data)
+
             generated = await streaming_generation(
                 prompt,
-                on_progress=on_progress,
+                on_progress=publish_safe_progress,
                 **generation_options,
             )
+            final_delta = markdown_publisher.flush()
+            if final_delta:
+                await on_progress(
+                    "answer_text_delta",
+                    {"delta": final_delta},
+                )
         else:
             generated = await client.generate_json(prompt, **generation_options)
         try:

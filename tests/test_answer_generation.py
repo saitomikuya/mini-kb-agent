@@ -56,6 +56,21 @@ class RecordingAnswerClient:
         pytest.fail("answer generation must not use multimodal generation")
 
 
+class StreamingAnswerClient(RecordingAnswerClient):
+    async def generate_json_stream(
+        self,
+        prompt: str,
+        *,
+        on_progress: Any,
+        **kwargs: Any,
+    ):
+        self.calls.append((prompt, kwargs))
+        raw_json = json.dumps(self.value, ensure_ascii=True)
+        for character in raw_json:
+            await on_progress("output_delta", {"delta": character})
+        return SimpleNamespace(value=self.value)
+
+
 def _settings(tmp_path: Path) -> Settings:
     settings = Settings(
         data_dir=tmp_path / "data",
@@ -310,6 +325,55 @@ def test_public_answer_schema_has_the_required_exact_shape() -> None:
         "missing_information",
         "prompt",
     }
+
+
+def test_streaming_answer_publishes_only_decoded_markdown_deltas(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    engine = build_engine(settings)
+    Base.metadata.create_all(engine)
+    session = build_session_factory(engine)()
+    expected_markdown = '第一行\n引用“原文”与表情 😀'
+    client = StreamingAnswerClient(
+        {
+            "answer_markdown": expected_markdown,
+            "citations": [],
+            "conflicts": [],
+            "downloads": [],
+            "research_handoff": None,
+        }
+    )
+    progress: list[tuple[str, dict[str, Any]]] = []
+
+    async def on_progress(progress_type: str, data: dict[str, Any]) -> None:
+        progress.append((progress_type, data))
+
+    try:
+        result = asyncio.run(
+            AnswerGenerationService(
+                session,
+                model_resolver=lambda _role: client,
+                settings=settings,
+            ).generate_with_progress(
+                "请整理证据",
+                _navigation([]),
+                on_progress=on_progress,
+            )
+        )
+    finally:
+        session.close()
+        engine.dispose()
+
+    answer_deltas = [
+        data["delta"]
+        for progress_type, data in progress
+        if progress_type == "answer_text_delta"
+    ]
+    assert "".join(answer_deltas) == expected_markdown
+    assert result.answer_markdown == expected_markdown
+    assert all(progress_type != "output_delta" for progress_type, _data in progress)
+    assert '"citations"' not in "".join(answer_deltas)
 
 
 def test_external_research_handoff_is_preserved_for_user_review(

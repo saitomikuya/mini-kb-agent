@@ -149,7 +149,7 @@ def bind_model_role(
     data: ModelRoleBindingUpdate,
     service: ServiceDependency,
 ) -> ModelRoleBindingRead:
-    return service.bind_role(role, data.model_profile_id)
+    return service.bind_role(role, data.model_profile_id, data.reasoning_effort)
 
 
 @router.put("/model-roles/{role}/prompts", response_model=ModelRoleBindingRead)

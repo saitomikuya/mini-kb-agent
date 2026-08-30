@@ -32,6 +32,17 @@ class ModelRole(StrEnum):
     ANSWER_GENERATION = "answer_generation"
 
 
+class ReasoningEffort(StrEnum):
+    """Role-level reasoning choices exposed by the administration UI."""
+
+    MODEL_DEFAULT = "model_default"
+    MINIMAL = "minimal"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+
+
 class ModelTestStatus(StrEnum):
     PASSED = "passed"
     PARTIAL = "partial"
@@ -39,3 +50,10 @@ class ModelTestStatus(StrEnum):
 
 
 ALL_MODEL_ROLES = tuple(ModelRole)
+
+DEFAULT_ROLE_REASONING_EFFORTS = {
+    ModelRole.DOCUMENT_CONVERSION: ReasoningEffort.LOW,
+    ModelRole.INDEX_GENERATION: ReasoningEffort.LOW,
+    ModelRole.QUERY_ROUTER: ReasoningEffort.MODEL_DEFAULT,
+    ModelRole.ANSWER_GENERATION: ReasoningEffort.MODEL_DEFAULT,
+}

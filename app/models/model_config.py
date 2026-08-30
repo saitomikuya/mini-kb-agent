@@ -205,6 +205,7 @@ class ModelRoleBinding(Base):
         nullable=False,
         index=True,
     )
+    reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

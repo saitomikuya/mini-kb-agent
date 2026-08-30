@@ -58,6 +58,9 @@ class ModelClient(Protocol):
     @property
     def max_output_tokens(self) -> int | None: ...
 
+    @property
+    def role_reasoning_effort(self) -> str | None: ...
+
     async def generate_text(
         self,
         prompt: str,
@@ -117,6 +120,7 @@ class _OpenAIProtocolClient:
         *,
         http_client_factory: HttpClientFactory | None = None,
         role_prompts: Mapping[str, str] | None = None,
+        role_reasoning_effort: str | None = None,
     ) -> None:
         self.provider = provider
         self.profile = profile
@@ -127,6 +131,7 @@ class _OpenAIProtocolClient:
             )
         )
         self.role_prompts = dict(role_prompts or {})
+        self.role_reasoning_effort = role_reasoning_effort
         self._resolved_protocol: TestedProtocol | None = None
 
     @property
@@ -434,7 +439,11 @@ class _OpenAIProtocolClient:
         verbosity: str | None,
     ) -> dict[str, Any]:
         output_limit = max_output_tokens or self.profile.max_output_tokens
-        effort = reasoning_effort or self.profile.reasoning_effort
+        effort = (
+            reasoning_effort
+            if reasoning_effort is not None
+            else self.role_reasoning_effort or self.profile.reasoning_effort
+        )
         extra_request = dict(self.profile.extra_request_json or {})
 
         if protocol is TestedProtocol.RESPONSES:
@@ -612,17 +621,39 @@ class _OpenAIProtocolClient:
                             elif event_type == "response.output_text.delta":
                                 delta = event.get("delta")
                                 if isinstance(delta, str):
+                                    if (
+                                        reasoning_summary
+                                        and published_summary_length
+                                        < len(reasoning_summary)
+                                    ):
+                                        await on_progress(
+                                            "reasoning_summary",
+                                            {"summary": reasoning_summary.strip()},
+                                        )
+                                        published_summary_length = len(
+                                            reasoning_summary
+                                        )
                                     output_parts.append(delta)
                                     output_length += len(delta)
+                                    await on_progress(
+                                        "output_delta",
+                                        {"delta": delta},
+                                    )
                             elif event_type == "response.completed":
                                 response_value = event.get("response")
                                 if isinstance(response_value, Mapping):
                                     completed_response = response_value
                         else:
-                            output_length += _append_chat_completion_delta(
+                            delta = _append_chat_completion_delta(
                                 event,
                                 output_parts,
                             )
+                            if delta:
+                                output_length += len(delta)
+                                await on_progress(
+                                    "output_delta",
+                                    {"delta": delta},
+                                )
 
                         if output_length >= next_output_report:
                             await on_progress(
@@ -724,11 +755,11 @@ def _should_publish_summary(
 def _append_chat_completion_delta(
     event: Mapping[str, Any],
     output_parts: list[str],
-) -> int:
+) -> str:
     choices = event.get("choices")
     if not isinstance(choices, list):
-        return 0
-    added = 0
+        return ""
+    added: list[str] = []
     for choice in choices:
         if not isinstance(choice, Mapping):
             continue
@@ -738,13 +769,13 @@ def _append_chat_completion_delta(
         content = delta.get("content")
         if isinstance(content, str):
             output_parts.append(content)
-            added += len(content)
+            added.append(content)
         elif isinstance(content, list):
             text = _collect_text_items(content)
             if text:
                 output_parts.append(text)
-                added += len(text)
-    return added
+                added.append(text)
+    return "".join(added)
 
 
 def build_model_client(
@@ -754,6 +785,7 @@ def build_model_client(
     *,
     http_client_factory: HttpClientFactory | None = None,
     role_prompts: Mapping[str, str] | None = None,
+    role_reasoning_effort: str | None = None,
 ) -> ModelClient:
     provider_type = ProviderType(provider.provider_type)
     client_class: type[_OpenAIProtocolClient]
@@ -771,6 +803,7 @@ def build_model_client(
         api_key,
         http_client_factory=http_client_factory,
         role_prompts=role_prompts,
+        role_reasoning_effort=role_reasoning_effort,
     )
 
 

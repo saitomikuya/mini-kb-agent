@@ -276,6 +276,31 @@ def test_first_build_creates_cards_compact_indexes_and_current_pointer(
     assert second.index_status == IndexStatus.INDEXED
 
 
+def test_progress_reports_each_recently_completed_document(
+    index_infra: IndexInfra,
+) -> None:
+    first = _add_ready_document(index_infra, "progress/first.md", "first")
+    second = _add_ready_document(index_infra, "progress/second.md", "second")
+    updates: list[dict[str, object]] = []
+
+    IndexGenerationService(
+        index_infra.settings,
+        index_infra.session,
+        model_resolver=lambda _role: index_infra.client,
+    ).build_and_activate(progress=lambda progress: updates.append(dict(progress)))
+
+    completed_names = [
+        update.get("last_completed_document_name")
+        for update in updates
+        if update.get("last_completed_document_name")
+    ]
+    assert {first.relative_path, second.relative_path}.issubset(completed_names)
+    assert updates[-1]["last_completed_document_name"] in {
+        first.relative_path,
+        second.relative_path,
+    }
+
+
 def test_card_schema_requires_manifest_part_count_and_retries_invalid_response(
     index_infra: IndexInfra,
     monkeypatch: pytest.MonkeyPatch,

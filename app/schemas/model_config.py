@@ -5,12 +5,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
+from app.config import MAX_CONFIGURABLE_OUTPUT_TOKENS
 from app.llm.types import (
     AzureMode,
     ModelRole,
     ModelTestStatus,
     ProtocolPreference,
     ProviderType,
+    ReasoningEffort,
     TestedProtocol,
 )
 
@@ -132,6 +134,7 @@ class ModelProfileCreate(StrictSchema):
     max_output_tokens: int | None = Field(
         default=DEFAULT_MODEL_MAX_OUTPUT_TOKENS,
         gt=0,
+        le=MAX_CONFIGURABLE_OUTPUT_TOKENS,
     )
     reasoning_effort: str | None = Field(default=None, max_length=32)
     extra_request_json: dict[str, Any] = Field(default_factory=dict)
@@ -152,7 +155,11 @@ class ModelProfileUpdate(StrictSchema):
     remote_model_name: str | None = Field(default=None, min_length=1, max_length=300)
     protocol_override: ProtocolPreference | None = None
     context_window: int | None = Field(default=None, gt=0)
-    max_output_tokens: int | None = Field(default=None, gt=0)
+    max_output_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        le=MAX_CONFIGURABLE_OUTPUT_TOKENS,
+    )
     reasoning_effort: str | None = Field(default=None, max_length=32)
     extra_request_json: dict[str, Any] | None = None
     enabled: bool | None = None
@@ -194,6 +201,7 @@ class ModelProfileRead(StrictSchema):
 
 class ModelRoleBindingUpdate(StrictSchema):
     model_profile_id: int | None
+    reasoning_effort: ReasoningEffort | None = None
 
 
 class ModelRolePromptUpdate(StrictSchema):
@@ -211,6 +219,8 @@ class ModelRolePromptTaskRead(StrictSchema):
 class ModelRoleBindingRead(StrictSchema):
     role: ModelRole
     model_profile_id: int | None
+    reasoning_effort: ReasoningEffort
+    default_reasoning_effort: ReasoningEffort
     updated_at: datetime | None
     prompts_updated_at: datetime | None
     prompt_tasks: list[ModelRolePromptTaskRead]

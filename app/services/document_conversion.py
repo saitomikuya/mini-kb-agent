@@ -1109,6 +1109,11 @@ class DocumentConversionEngine:
             "visual_evidence",
         )
         profile = getattr(client, "profile", None)
+        reasoning_effort = getattr(
+            client,
+            "role_reasoning_effort",
+            VISUAL_REASONING_EFFORT,
+        )
         model_cache_key = ":".join(
             (
                 str(getattr(profile, "id", "")),
@@ -1135,7 +1140,7 @@ class DocumentConversionEngine:
                         prompt,
                         media,
                         str(VISUAL_MAX_OUTPUT_TOKENS),
-                        VISUAL_REASONING_EFFORT,
+                        reasoning_effort or "model_default",
                     )
                 ).encode("utf-8")
                 + b"\0"
@@ -1199,7 +1204,7 @@ class DocumentConversionEngine:
                                     image,
                                     image_media_type=image_media_type,
                                     max_output_tokens=VISUAL_MAX_OUTPUT_TOKENS,
-                                    reasoning_effort=VISUAL_REASONING_EFFORT,
+                                    reasoning_effort=reasoning_effort,
                                 ),
                                 heartbeat,
                             )

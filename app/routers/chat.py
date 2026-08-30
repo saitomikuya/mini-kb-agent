@@ -373,6 +373,17 @@ def _model_progress_event(
     progress_type: str,
     progress_data: Mapping[str, Any],
 ) -> tuple[str, dict[str, Any]] | None:
+    if progress_type == "answer_text_delta":
+        delta = progress_data.get("delta")
+        if not isinstance(delta, str) or not delta:
+            return None
+        return (
+            "answer_text_delta",
+            {
+                "delta": delta,
+                "source": "model",
+            },
+        )
     if progress_type == "reasoning_summary":
         summary = progress_data.get("summary")
         if not isinstance(summary, str) or not summary.strip():
