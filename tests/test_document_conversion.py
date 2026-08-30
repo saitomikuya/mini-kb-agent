@@ -311,7 +311,7 @@ def test_batch_conversion_creates_one_job_for_selected_unconverted_files(
     assert already_converted.status_code == 409
 
 
-def test_unsupported_is_terminal_without_blocking_supported_file(
+def test_unsupported_is_reported_failed_without_blocking_supported_file(
     conversion_infra: ConversionInfra,
 ) -> None:
     (conversion_infra.settings.source_dir / "cannot-convert.bin").write_bytes(b"raw")
@@ -330,7 +330,9 @@ def test_unsupported_is_terminal_without_blocking_supported_file(
         record["filename"]: record
         for record in conversion_infra.client.get("/api/admin/files").json()
     }
-    assert detail["status"] == "COMPLETED"
+    assert detail["status"] == "FAILED"
+    assert detail["completed_items"] == 1
+    assert detail["failed_items"] == 1
     assert files["cannot-convert.bin"]["conversion_status"] == "UNSUPPORTED"
     assert files["works.txt"]["conversion_status"] == "READY"
     assert not (
@@ -342,6 +344,46 @@ def test_unsupported_is_terminal_without_blocking_supported_file(
         / str(by_name["works.txt"]["id"])
         / "manifest.json"
     ).is_file()
+
+
+def test_legacy_doc_is_converted_through_libreoffice_bridge(
+    conversion_infra: ConversionInfra,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = conversion_infra.settings.source_dir / "旧版方案.doc"
+    source.write_bytes(b"legacy-word-placeholder")
+
+    def fake_libreoffice(
+        _engine: DocumentConversionEngine,
+        _path: Path,
+        output_dir: Path,
+        heartbeat: Callable[[], None],
+    ) -> Path:
+        converted = output_dir / "旧版方案.docx"
+        document = Document()
+        document.add_heading("旧版方案", level=1)
+        document.add_paragraph("这是从旧版 Word 转换出的正文。")
+        document.save(converted)
+        heartbeat()
+        return converted
+
+    monkeypatch.setattr(
+        DocumentConversionEngine,
+        "_convert_legacy_doc_to_docx",
+        fake_libreoffice,
+    )
+    record = _scan(conversion_infra)[0]
+    queued = conversion_infra.client.post(
+        f"/api/admin/files/{record['id']}/convert"
+    )
+    assert queued.status_code == 202
+
+    _run_next(conversion_infra.queue)
+
+    updated = conversion_infra.client.get("/api/admin/files").json()[0]
+    artifact = conversion_infra.settings.markdown_dir / str(record["id"])
+    assert updated["conversion_status"] == "READY"
+    assert "旧版方案" in (artifact / "part-001.md").read_text(encoding="utf-8")
 
 
 def test_conversion_failure_isolated_and_previous_artifact_not_published(
@@ -482,7 +524,7 @@ def test_oversized_anchored_draft_is_split_with_stable_segment_locations(
     manifest = json.loads((staged.staging_dir / "manifest.json").read_text())
 
     assert staged.part_count > 1
-    assert manifest["converter_version"] == "document-conversion-v2"
+    assert manifest["converter_version"] == "document-conversion-v3"
     assert manifest["parts"][0]["anchors"]["page"] == 7
     assert manifest["parts"][0]["anchors"]["segment"].startswith("1/")
     assert manifest["parts"][-1]["anchors"]["segment"].split("/")[0] == str(

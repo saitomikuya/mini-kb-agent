@@ -18,8 +18,10 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import tempfile
 import threading
+import time as monotonic_clock
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 import zipfile
@@ -41,7 +43,7 @@ from app.llm.registry import ModelRegistryError
 from app.llm.types import ModelRole
 
 
-CONVERTER_VERSION = "document-conversion-v2"
+CONVERTER_VERSION = "document-conversion-v3"
 EXCEL_ROWS_PER_PART = DEFAULT_DOCUMENT_EXCEL_ROWS_PER_PART
 # A bounded Markdown part is the atomic retrieval/evidence unit. 8K characters
 # is typically about 2K tokens for Latin text and at most about 8K tokens for
@@ -49,6 +51,7 @@ EXCEL_ROWS_PER_PART = DEFAULT_DOCUMENT_EXCEL_ROWS_PER_PART
 TEXT_CHARS_PER_PART = DEFAULT_DOCUMENT_TEXT_CHARS_PER_PART
 HEARTBEAT_INTERVAL_SECONDS = 15.0
 MODEL_REQUEST_TIMEOUT_SECONDS = 120.0
+LEGACY_DOC_CONVERSION_TIMEOUT_SECONDS = 300.0
 VISUAL_REQUEST_MAX_ATTEMPTS = 3
 VISUAL_RETRY_BASE_DELAY_SECONDS = 1.0
 VISUAL_CACHE_VERSION = "visual-evidence-v1"
@@ -73,6 +76,7 @@ PDF_RENDER_SCALE = 1.5
 SUPPORTED_EXTENSIONS = frozenset(
     {
         ".pdf",
+        ".doc",
         ".docx",
         ".pptx",
         ".xlsx",
@@ -393,6 +397,8 @@ class DocumentConversionEngine:
             return [self._extract_image(path, heartbeat)]
         if extension == ".pdf":
             return self._extract_pdf(path, heartbeat)
+        if extension == ".doc":
+            return self._extract_legacy_doc(path, heartbeat)
         if extension == ".pptx":
             return self._extract_pptx(path, heartbeat)
         if extension in {".txt", ".md"}:
@@ -406,6 +412,106 @@ class DocumentConversionEngine:
 
         markdown = self._convert_with_markitdown(path, heartbeat=heartbeat)
         return self._chunk_sections(markdown, section_prefix="section")
+
+    def _extract_legacy_doc(
+        self,
+        path: Path,
+        heartbeat: Heartbeat,
+    ) -> list[PartDraft]:
+        """Convert legacy binary Word to DOCX before normal Markdown extraction."""
+        self._emit_progress(phase="legacy_office_conversion")
+        with tempfile.TemporaryDirectory(prefix="mini-kb-legacy-doc-") as temp_dir:
+            converted_path = self._convert_legacy_doc_to_docx(
+                path,
+                Path(temp_dir),
+                heartbeat,
+            )
+            markdown = self._convert_with_markitdown(
+                converted_path,
+                heartbeat=heartbeat,
+            )
+        return self._chunk_sections(markdown, section_prefix="section")
+
+    def _convert_legacy_doc_to_docx(
+        self,
+        path: Path,
+        output_dir: Path,
+        heartbeat: Heartbeat,
+    ) -> Path:
+        executable = shutil.which("libreoffice") or shutil.which("soffice")
+        if executable is None:
+            raise DocumentConversionError(
+                "Legacy .doc conversion requires LibreOffice, but it is not installed"
+            )
+
+        profile_dir = output_dir / "libreoffice-profile"
+        profile_dir.mkdir()
+        command = [
+            executable,
+            f"-env:UserInstallation={profile_dir.resolve().as_uri()}",
+            "--headless",
+            "--convert-to",
+            "docx",
+            "--outdir",
+            str(output_dir),
+            str(path),
+        ]
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except OSError as exc:
+            raise DocumentConversionError(
+                "Could not start LibreOffice for legacy .doc conversion"
+            ) from exc
+
+        deadline = (
+            monotonic_clock.monotonic()
+            + LEGACY_DOC_CONVERSION_TIMEOUT_SECONDS
+        )
+        stdout = stderr = ""
+        try:
+            while True:
+                remaining = deadline - monotonic_clock.monotonic()
+                if remaining <= 0:
+                    process.kill()
+                    process.communicate()
+                    raise DocumentConversionError(
+                        "Legacy .doc conversion timed out in LibreOffice"
+                    )
+                try:
+                    stdout, stderr = process.communicate(
+                        timeout=min(HEARTBEAT_INTERVAL_SECONDS, remaining)
+                    )
+                    break
+                except subprocess.TimeoutExpired:
+                    heartbeat()
+        except BaseException:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+            raise
+
+        if process.returncode != 0:
+            detail = (stderr or stdout).strip().replace("\n", " ")[-500:]
+            raise DocumentConversionError(
+                "LibreOffice could not convert the legacy .doc file"
+                + (f": {detail}" if detail else "")
+            )
+        candidates = [
+            candidate
+            for candidate in output_dir.glob("*.docx")
+            if candidate.is_file()
+        ]
+        if len(candidates) != 1:
+            raise DocumentConversionError(
+                "LibreOffice reported success but produced no usable DOCX file"
+            )
+        heartbeat()
+        return candidates[0]
 
     @property
     def markitdown(self) -> MarkItDown:

@@ -3,7 +3,7 @@ FROM python:3.12-slim
 LABEL org.opencontainers.image.title="mini-kb-agent" \
       org.opencontainers.image.description="Lightweight multimodal knowledge QA without embeddings or a vector database" \
       org.opencontainers.image.source="https://github.com/saitomikuya/mini-kb-agent" \
-      org.opencontainers.image.version="0.7.3"
+      org.opencontainers.image.version="0.8.0"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -20,6 +20,12 @@ COPY app ./app
 COPY prompts ./prompts
 COPY migrations ./migrations
 COPY alembic.ini supervisord.conf entrypoint.sh ./
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        fonts-noto-cjk \
+        libreoffice-writer \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir --timeout 120 --retries 10 . \
     && chmod +x /app/entrypoint.sh \

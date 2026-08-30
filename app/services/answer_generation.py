@@ -222,8 +222,15 @@ class AnswerGenerationService:
         self,
         question: str,
         navigation: NavigationResult,
+        *,
+        conversation_history: Sequence[Mapping[str, str]] = (),
     ) -> AnswerResult:
-        return await self._generate(question, navigation, on_progress=None)
+        return await self._generate(
+            question,
+            navigation,
+            conversation_history=conversation_history,
+            on_progress=None,
+        )
 
     async def generate_with_progress(
         self,
@@ -231,10 +238,12 @@ class AnswerGenerationService:
         navigation: NavigationResult,
         *,
         on_progress: ModelProgressCallback,
+        conversation_history: Sequence[Mapping[str, str]] = (),
     ) -> AnswerResult:
         return await self._generate(
             question,
             navigation,
+            conversation_history=conversation_history,
             on_progress=on_progress,
         )
 
@@ -243,6 +252,7 @@ class AnswerGenerationService:
         question: str,
         navigation: NavigationResult,
         *,
+        conversation_history: Sequence[Mapping[str, str]],
         on_progress: ModelProgressCallback | None,
     ) -> AnswerResult:
         normalized_question = question.strip()
@@ -260,6 +270,7 @@ class AnswerGenerationService:
             navigation,
             evidence_parts,
             records,
+            conversation_history=conversation_history,
         )
         client = self.model_resolver(ModelRole.ANSWER_GENERATION)
         profile_output_limit = getattr(client, "max_output_tokens", None)
@@ -381,15 +392,29 @@ class QuestionAnsweringService:
         _navigation, answer = await self.answer_with_navigation(question)
         return answer
 
-    async def navigate(self, question: str) -> NavigationResult:
-        return await self.navigation.navigate(question)
+    async def navigate(
+        self,
+        question: str,
+        *,
+        conversation_history: Sequence[Mapping[str, str]] = (),
+    ) -> NavigationResult:
+        return await self.navigation.navigate(
+            question,
+            conversation_history=conversation_history,
+        )
 
     async def generate_answer(
         self,
         question: str,
         navigation: NavigationResult,
+        *,
+        conversation_history: Sequence[Mapping[str, str]] = (),
     ) -> AnswerResult:
-        return await self.answer_generation.generate(question, navigation)
+        return await self.answer_generation.generate(
+            question,
+            navigation,
+            conversation_history=conversation_history,
+        )
 
     async def generate_answer_with_progress(
         self,
@@ -397,11 +422,13 @@ class QuestionAnsweringService:
         navigation: NavigationResult,
         *,
         on_progress: ModelProgressCallback,
+        conversation_history: Sequence[Mapping[str, str]] = (),
     ) -> AnswerResult:
         return await self.answer_generation.generate_with_progress(
             question,
             navigation,
             on_progress=on_progress,
+            conversation_history=conversation_history,
         )
 
     async def answer_with_navigation(
@@ -437,6 +464,8 @@ def _answer_prompt(
     navigation: NavigationResult,
     evidence_parts: Sequence[NavigatedPart],
     records: Mapping[str, SourceFile],
+    *,
+    conversation_history: Sequence[Mapping[str, str]] = (),
 ) -> str:
     selected_markdown_parts = [
         {
@@ -475,12 +504,17 @@ def _answer_prompt(
             }
         )
 
+    payload: dict[str, Any] = {
+        "user_question": question,
+        "selected_markdown_parts": selected_markdown_parts,
+        "source_metadata": source_metadata,
+    }
+    if conversation_history:
+        payload["conversation_history"] = [
+            dict(message) for message in conversation_history
+        ]
     return json.dumps(
-        {
-            "user_question": question,
-            "selected_markdown_parts": selected_markdown_parts,
-            "source_metadata": source_metadata,
-        },
+        payload,
         ensure_ascii=False,
         separators=(",", ":"),
     )

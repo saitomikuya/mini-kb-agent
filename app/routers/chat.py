@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import suppress
 import json
 from pathlib import Path
@@ -34,12 +34,19 @@ from app.services.chat import navigation_event_payloads, public_answer_payload
 
 
 class ChatAnswering(Protocol):
-    async def navigate(self, question: str) -> NavigationResult: ...
+    async def navigate(
+        self,
+        question: str,
+        *,
+        conversation_history: Sequence[Mapping[str, str]] = (),
+    ) -> NavigationResult: ...
 
     async def generate_answer(
         self,
         question: str,
         navigation: NavigationResult,
+        *,
+        conversation_history: Sequence[Mapping[str, str]] = (),
     ) -> AnswerResult: ...
 
 
@@ -134,11 +141,15 @@ def stream_chat(
     payload: ChatStreamRequest,
     request: Request,
 ) -> StreamingResponse:
-    """Open a stateless evidence-backed stream; the browser owns all history."""
+    """Open a stateless stream using bounded history supplied by the browser."""
+    history = tuple(
+        message.model_dump(mode="json") for message in payload.history
+    )
     return _streaming_response(
         _completion_stream(
             request,
             question=payload.question,
+            conversation_history=history,
         )
     )
 
@@ -147,6 +158,7 @@ async def _completion_stream(
     request: Request,
     *,
     question: str,
+    conversation_history: Sequence[Mapping[str, str]] = (),
 ) -> AsyncIterator[str]:
     yield _sse(
         "request_received",
@@ -162,7 +174,12 @@ async def _completion_stream(
         }
         yield _sse("navigation_started", navigation_data)
 
-        navigation_task = asyncio.create_task(answering.navigate(question))
+        navigation_task = asyncio.create_task(
+            answering.navigate(
+                question,
+                conversation_history=conversation_history,
+            )
+        )
         navigation_started_at = time.monotonic()
         try:
             while True:
@@ -220,11 +237,16 @@ async def _completion_stream(
                     question,
                     navigation,
                     on_progress=report_model_progress,
+                    conversation_history=conversation_history,
                 )
             )
         else:
             answer_task = asyncio.create_task(
-                answering.generate_answer(question, navigation)
+                answering.generate_answer(
+                    question,
+                    navigation,
+                    conversation_history=conversation_history,
+                )
             )
 
         answer_started = time.monotonic()

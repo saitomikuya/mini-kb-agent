@@ -376,6 +376,45 @@ def test_streaming_answer_publishes_only_decoded_markdown_deltas(
     assert '"citations"' not in "".join(answer_deltas)
 
 
+def test_answer_prompt_includes_bounded_follow_up_history(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    engine = build_engine(settings)
+    Base.metadata.create_all(engine)
+    session = build_session_factory(engine)()
+    client = RecordingAnswerClient(
+        {
+            "answer_markdown": "来源见已选证据。",
+            "citations": [],
+            "conflicts": [],
+            "downloads": [],
+            "research_handoff": None,
+        }
+    )
+    history = [
+        {"role": "user", "content": "产品A的规格是什么？"},
+        {"role": "assistant", "content": "规格值为 10。"},
+    ]
+    try:
+        asyncio.run(
+            AnswerGenerationService(
+                session,
+                model_resolver=lambda _role: client,
+                settings=settings,
+            ).generate(
+                "那它的来源呢？",
+                _navigation([]),
+                conversation_history=history,
+            )
+        )
+    finally:
+        session.close()
+        engine.dispose()
+
+    payload = json.loads(client.calls[0][0])
+    assert payload["user_question"] == "那它的来源呢？"
+    assert payload["conversation_history"] == history
+
+
 def test_external_research_handoff_is_preserved_for_user_review(
     tmp_path: Path,
 ) -> None:

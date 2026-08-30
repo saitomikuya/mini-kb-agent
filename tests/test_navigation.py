@@ -198,6 +198,7 @@ def _run_navigation(
     settings: Settings,
     client: RecordingRouterClient,
     question: str = "Where are the relevant facts?",
+    conversation_history: list[dict[str, str]] | None = None,
 ):
     roles: list[ModelRole] = []
 
@@ -207,7 +208,10 @@ def _run_navigation(
         return client
 
     result = asyncio.run(
-        NavigationService(settings, model_resolver=resolver).navigate(question)
+        NavigationService(settings, model_resolver=resolver).navigate(
+            question,
+            conversation_history=conversation_history or (),
+        )
     )
     return result, roles
 
@@ -257,6 +261,49 @@ def test_question_selects_correct_folder_document_and_markdown_part(tmp_path: Pa
     assert result.parts[0].content == "# Sales\n\nThe grounded sales fact."
     assert result.confidence == 0.91
     assert "grounded sales fact" not in " ".join(result.display_steps).lower()
+
+
+def test_follow_up_history_is_included_in_every_router_prompt(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _write_navigation_index(
+        settings,
+        {"products": [{"document_id": "1", "title": "产品A规格"}]},
+    )
+
+    def respond(prompt: str, _call: int) -> dict[str, Any]:
+        if "phase 1" in prompt:
+            return {
+                "intent": "answer",
+                "selected_folders": ["products"],
+                "display_reason": "定位产品资料。",
+                "need_more_information": False,
+            }
+        return {
+            "selected_documents": [
+                {
+                    "document_id": "1",
+                    "part_ids": ["part-001"],
+                    "display_reason": "读取产品规格。",
+                }
+            ],
+            "confidence": 0.9,
+        }
+
+    client = RecordingRouterClient(respond)
+    _run_navigation(
+        settings,
+        client,
+        question="那它的来源呢？",
+        conversation_history=[
+            {"role": "user", "content": "产品A的规格是什么？"},
+            {"role": "assistant", "content": "规格值为 10。"},
+        ],
+    )
+
+    assert len(client.prompts) == 2
+    assert all('"conversation_history"' in prompt for prompt in client.prompts)
+    assert all('"current_user_question":"那它的来源呢？"' in prompt for prompt in client.prompts)
+    assert all("产品A的规格是什么" in prompt for prompt in client.prompts)
 
 
 def test_lexical_recall_bypasses_wrong_root_choice_and_falls_back_to_exact_part(

@@ -76,10 +76,23 @@ class NavigationService:
         self.evidence_model_resolver = evidence_model_resolver
         self._role_prompts = default_role_prompts(ModelRole.QUERY_ROUTER)
 
-    async def navigate(self, question: str) -> NavigationResult:
+    async def navigate(
+        self,
+        question: str,
+        *,
+        conversation_history: Sequence[Mapping[str, str]] = (),
+    ) -> NavigationResult:
         normalized_question = question.strip()
         if not normalized_question:
             raise NavigationError("The user question must not be blank")
+        model_question = _conversation_aware_question(
+            normalized_question,
+            conversation_history,
+        )
+        lexical_question = _conversation_aware_lexical_query(
+            normalized_question,
+            conversation_history,
+        )
 
         root, generation_dir = self._load_current_root()
         client = self.model_resolver(ModelRole.QUERY_ROUTER)
@@ -100,7 +113,7 @@ class NavigationService:
         try:
             lexical_candidates = search_lexical_index(
                 generation_dir / LEXICAL_INDEX_FILENAME,
-                normalized_question,
+                lexical_question,
                 limit=self.settings.lexical_candidate_parts,
                 per_document_limit=self.settings.lexical_max_parts_per_document,
             )
@@ -108,7 +121,7 @@ class NavigationService:
             raise NavigationIndexError("The local lexical index is invalid") from exc
 
         root_responses = await self._select_folders(
-            normalized_question,
+            model_question,
             root,
             client,
             budget,
@@ -221,7 +234,7 @@ class NavigationService:
             routing_documents, cards, compressed = self._routing_documents(
                 folder,
                 budget,
-                normalized_question,
+                model_question,
                 intent,
                 folder_candidates,
             )
@@ -245,7 +258,7 @@ class NavigationService:
         routing_results = await asyncio.gather(
             *(
                 self._select_documents(
-                    normalized_question,
+                    model_question,
                     intent,
                     folder,
                     routing_documents,
@@ -1049,6 +1062,36 @@ def estimate_tokens(value: str) -> int:
     if not value:
         return 0
     return max(1, math.ceil(len(value.encode("utf-8")) / 3))
+
+
+def _conversation_aware_question(
+    question: str,
+    history: Sequence[Mapping[str, str]],
+) -> str:
+    if not history:
+        return question
+    return json.dumps(
+        {
+            "conversation_history": [dict(message) for message in history],
+            "current_user_question": question,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _conversation_aware_lexical_query(
+    question: str,
+    history: Sequence[Mapping[str, str]],
+) -> str:
+    prior_user_questions = [
+        content.strip()
+        for message in history
+        if message.get("role") == "user"
+        and isinstance((content := message.get("content")), str)
+        and content.strip()
+    ]
+    return "\n".join([*prior_user_questions[-3:], question])
 
 
 def _positive_model_limit(value: Any, default: int) -> int:

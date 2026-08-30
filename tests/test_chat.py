@@ -178,13 +178,20 @@ def _answer() -> AnswerResult:
 
 
 class FakeAnswering:
-    async def navigate(self, _question: str) -> NavigationResult:
+    async def navigate(
+        self,
+        _question: str,
+        *,
+        conversation_history: Any = (),
+    ) -> NavigationResult:
         return _navigation()
 
     async def generate_answer(
         self,
         _question: str,
         _navigation_result: NavigationResult,
+        *,
+        conversation_history: Any = (),
     ) -> AnswerResult:
         return _answer()
 
@@ -196,6 +203,7 @@ class ProgressAnswering(FakeAnswering):
         _navigation_result: NavigationResult,
         *,
         on_progress: Any,
+        conversation_history: Any = (),
     ) -> AnswerResult:
         await on_progress(
             "reasoning_summary",
@@ -212,8 +220,35 @@ class FailingAnswering(FakeAnswering):
         self,
         _question: str,
         _navigation_result: NavigationResult,
+        *,
+        conversation_history: Any = (),
     ) -> AnswerResult:
         raise RuntimeError("provider secret must not be exposed")
+
+
+class HistoryRecordingAnswering(FakeAnswering):
+    def __init__(self) -> None:
+        self.navigation_history: list[dict[str, str]] = []
+        self.answer_history: list[dict[str, str]] = []
+
+    async def navigate(
+        self,
+        _question: str,
+        *,
+        conversation_history: Any = (),
+    ) -> NavigationResult:
+        self.navigation_history = [dict(message) for message in conversation_history]
+        return _navigation()
+
+    async def generate_answer(
+        self,
+        _question: str,
+        _navigation_result: NavigationResult,
+        *,
+        conversation_history: Any = (),
+    ) -> AnswerResult:
+        self.answer_history = [dict(message) for message in conversation_history]
+        return _answer()
 
 
 class FakeTitleModel:
@@ -310,7 +345,7 @@ def test_root_directly_renders_public_chat_login_and_local_history_ui(
     assert "浏览知识库文件，需要时可直接下载。" in page.text
     assert "索引" not in page.text
     assert 'id="delete-session"' not in page.text
-    assert "聊天记录仅保存在本浏览器，不会上传云端" in page.text
+    assert "聊天记录保存在本浏览器；继续提问时会把当前会话的近期上下文发送给模型" in page.text
     assert "输入问题，开始知识问答。" in page.text
     assert "React" not in page.text
     assert 'href="/static/chat.css?' in page.text
@@ -341,6 +376,10 @@ def test_root_directly_renders_public_chat_login_and_local_history_ui(
     assert "文件目录：" in chat_script.text
     assert "list.start = start" in chat_script.text
     assert "queueAnswerTextDelta" in chat_script.text
+    assert "waitForAnswerTextDrain" in chat_script.text
+    assert "pendingMarkdown" in chat_script.text
+    assert "chatContextMessages" in chat_script.text
+    assert "JSON.stringify({ question, history })" in chat_script.text
     assert "finalizeStreamedAnswer" in chat_script.text
     assert 'type !== "answer_text_delta"' in chat_script.text
     assert "window.requestAnimationFrame" in chat_script.text
@@ -443,6 +482,29 @@ def test_sse_forwards_safe_model_progress_without_raw_reasoning(tmp_path: Path) 
         assert all(events[index][1]["source"] == "model" for index in text_indexes)
         assert "raw_reasoning" not in response.text
         assert event_types[-1] == "completed"
+    finally:
+        client_iterator.close()
+
+
+def test_follow_up_history_is_forwarded_to_navigation_and_answer_models(
+    tmp_path: Path,
+) -> None:
+    answering = HistoryRecordingAnswering()
+    client_iterator = _client(tmp_path, answering)
+    client = next(client_iterator)
+    history = [
+        {"role": "user", "content": "产品A的规格是什么？"},
+        {"role": "assistant", "content": "规格值为 10。"},
+    ]
+    try:
+        response = client.post(
+            "/api/chat/stream",
+            json={"question": "那它的来源呢？", "history": history},
+        )
+        assert response.status_code == 200
+        assert _sse_events(response.text)[-1][0] == "completed"
+        assert answering.navigation_history == history
+        assert answering.answer_history == history
     finally:
         client_iterator.close()
 

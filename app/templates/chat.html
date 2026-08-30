@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ app_name }} · 聊天</title>
-    <link rel="stylesheet" href="/static/chat.css?v=20260830-answer-stream-v1">
+    <link rel="stylesheet" href="/static/chat.css?v=20260830-conversation-v2">
   </head>
   <body>
     <section id="login-view" class="login-view" aria-labelledby="login-title" hidden>
@@ -33,7 +33,7 @@
             <button id="close-sessions" class="icon-button sidebar-close-button" type="button" title="关闭会话列表" aria-label="关闭会话列表">×</button>
           </div>
         </div>
-        <p class="local-history-note">聊天记录仅保存在本浏览器，不会上传云端</p>
+        <p class="local-history-note">聊天记录保存在本浏览器；继续提问时会把当前会话的近期上下文发送给模型</p>
         <nav id="sessions" class="sessions" aria-live="polite"></nav>
       </aside>
       <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭会话列表" aria-hidden="true" tabindex="-1"></button>
@@ -89,6 +89,6 @@
         <p class="source-library-note">这里仅供浏览和下载，文件管理请前往管理控制台。</p>
       </div>
     </dialog>
-    <script src="/static/chat.js?v=20260830-answer-stream-v1" defer></script>
+    <script src="/static/chat.js?v=20260830-conversation-v2" defer></script>
   </body>
 </html>

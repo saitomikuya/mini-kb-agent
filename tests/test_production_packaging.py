@@ -22,6 +22,8 @@ def test_docker_and_supervisor_contract() -> None:
     assert "STOPSIGNAL SIGTERM" in dockerfile
     assert "HEALTHCHECK" in dockerfile
     assert "http://127.0.0.1:8080/health" in dockerfile
+    assert "libreoffice-writer" in dockerfile
+    assert "fonts-noto-cjk" in dockerfile
     assert "python -m uvicorn app.main:app --host 0.0.0.0 --port 8080" in supervisor
     assert "--proxy-headers --forwarded-allow-ips=*" in supervisor
     assert "huey_consumer.py app.tasks.consumer.huey -w 1 -k thread" in supervisor

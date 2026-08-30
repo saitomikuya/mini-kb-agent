@@ -295,7 +295,19 @@ h1, h2 { margin-bottom: 0; font-size: 20px; }
   vertical-align: -.12em;
   animation: answer-cursor-blink .8s steps(1, end) infinite;
 }
+.answer-body.is-streaming {
+  animation: answer-stream-enter .18s ease-out both;
+}
+@keyframes answer-stream-enter {
+  from { opacity: .35; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 @keyframes answer-cursor-blink { 50% { opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-body.is-streaming { animation: none; }
+  .answer-body.is-streaming::after { animation: none; }
+}
 
 .markdown-body { overflow-wrap: anywhere; }
 .markdown-body > :first-child { margin-top: 0; }

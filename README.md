@@ -124,7 +124,7 @@ Web、后台 Worker、任务队列和数据库都在同一个容器中。默认�
 
 ## 主要能力
 
-- 支持 PDF、DOCX、PPTX、XLSX、XLS、CSV、TSV、TXT、MD、HTML、JSON、XML、PNG、JPG/JPEG、WEBP；
+- 支持 PDF、DOC/DOCX、PPTX、XLSX、XLS、CSV、TSV、TXT、MD、HTML、JSON、XML、PNG、JPG/JPEG、WEBP；旧版 DOC 会先由镜像内置的 LibreOffice 转为 DOCX；
 - 文本可直接提取时优先使用确定性解析，扫描页和复杂视觉内容才调用 Vision；
 - Excel/CSV 数值由本地解析器读取，不让视觉模型重新猜测单元格；
 - 源文件扫描、单文件上传、文件夹上传、下载、原子替换和路径越界保护；
@@ -287,7 +287,7 @@ Huey 只负责调度，真实进度保存在主 SQLite 的 `jobs` 与 `job_items
 ### 问答链路
 
 ```text
-用户问题
+当前问题 + 当前会话近期上下文
   → 识别问答/下载意图
   → FTS/BM25 召回候选 part
   → JSON/card 白名单校验
@@ -613,8 +613,8 @@ docker compose logs -f
 - Provider API Key 加密保存在 SQLite，API 返回值始终掩码；
 - 源文件下载只接受数据库 document id，并重新验证真实路径；
 - `../`、绝对路径和越界 symlink 会被拒绝；
-- Chat 问题、回答、处理事件和会话标题只保存在当前浏览器 IndexedDB；
-- 服务端问答接口无会话状态，单次请求完成后不保存聊天内容；
+- Chat 问题、回答、处理事件和会话标题只持久化在当前浏览器 IndexedDB；后续提问会把当前会话最近 12 条、总计最多 4.8 万字符的上下文随请求发送给已配置模型；
+- 服务端问答接口无会话状态，单次请求完成后不保存聊天内容或会话上下文；
 - 官方镜像不包含本项目开发时使用的测试知识库、数据库、API Key 或运行日志；
 - 请只挂载专用的 sources/data 目录，不要把整个主目录映射进容器。
 

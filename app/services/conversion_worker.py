@@ -189,7 +189,7 @@ class DocumentConversionItemProcessor:
                 record.conversion_status = ConversionStatus.UNSUPPORTED
                 record.last_error = str(exc)
                 session.commit()
-                return
+                raise ItemFailure(str(exc)) from exc
             except DocumentConversionError as exc:
                 self._mark_failed(session, record, str(exc))
                 raise ItemFailure(str(exc)) from exc

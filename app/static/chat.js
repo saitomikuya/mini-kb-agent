@@ -951,7 +951,11 @@
       reasoningText,
       answerBody,
       streamedMarkdown: "",
+      pendingMarkdown: "",
       renderFrame: null,
+      lastRenderAt: 0,
+      drainResolvers: [],
+      drainTimeout: null,
       started: false,
       followAnswer: true,
       stopFollowing: null,
@@ -966,6 +970,85 @@
     messagesEl.removeEventListener("touchmove", placeholder.stopFollowing);
   };
 
+  const resolveAnswerTextDrain = (placeholder) => {
+    const resolvers = placeholder.drainResolvers.splice(0);
+    resolvers.forEach((resolve) => resolve());
+  };
+
+  const renderAnswerTextFrame = (placeholder, timestamp) => {
+    placeholder.renderFrame = null;
+    if (!placeholder.pendingMarkdown) {
+      resolveAnswerTextDrain(placeholder);
+      return;
+    }
+    if (placeholder.lastRenderAt && timestamp - placeholder.lastRenderAt < 28) {
+      placeholder.renderFrame = window.requestAnimationFrame((nextTimestamp) => {
+        renderAnswerTextFrame(placeholder, nextTimestamp);
+      });
+      return;
+    }
+    placeholder.lastRenderAt = timestamp;
+    const pendingCharacters = Array.from(placeholder.pendingMarkdown);
+    const charactersThisFrame = Math.min(12, Math.max(1, Math.ceil(pendingCharacters.length / 18)));
+    placeholder.streamedMarkdown += pendingCharacters.slice(0, charactersThisFrame).join("");
+    placeholder.pendingMarkdown = pendingCharacters.slice(charactersThisFrame).join("");
+    renderMarkdown(placeholder.answerBody, placeholder.streamedMarkdown);
+    if (placeholder.followAnswer) scrollToBottom();
+    if (placeholder.pendingMarkdown) {
+      placeholder.renderFrame = window.requestAnimationFrame((nextTimestamp) => {
+        renderAnswerTextFrame(placeholder, nextTimestamp);
+      });
+    } else {
+      resolveAnswerTextDrain(placeholder);
+    }
+  };
+
+  const scheduleAnswerTextFrame = (placeholder) => {
+    if (placeholder.renderFrame !== null) return;
+    placeholder.renderFrame = window.requestAnimationFrame((timestamp) => {
+      renderAnswerTextFrame(placeholder, timestamp);
+    });
+  };
+
+  const flushAnswerText = (placeholder) => {
+    if (placeholder.renderFrame !== null) window.cancelAnimationFrame(placeholder.renderFrame);
+    placeholder.renderFrame = null;
+    if (placeholder.pendingMarkdown) {
+      placeholder.streamedMarkdown += placeholder.pendingMarkdown;
+      placeholder.pendingMarkdown = "";
+      renderMarkdown(placeholder.answerBody, placeholder.streamedMarkdown);
+      if (placeholder.followAnswer) scrollToBottom();
+    }
+    resolveAnswerTextDrain(placeholder);
+  };
+
+  const waitForAnswerTextDrain = (placeholder) => {
+    if (!placeholder.pendingMarkdown) return Promise.resolve();
+    if (document.hidden || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      flushAnswerText(placeholder);
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      placeholder.drainResolvers.push(resolve);
+      if (placeholder.drainTimeout === null) {
+        placeholder.drainTimeout = window.setTimeout(() => {
+          placeholder.drainTimeout = null;
+          flushAnswerText(placeholder);
+        }, 1400);
+      }
+      scheduleAnswerTextFrame(placeholder);
+    });
+  };
+
+  const cancelAnswerText = (placeholder) => {
+    if (placeholder.renderFrame !== null) window.cancelAnimationFrame(placeholder.renderFrame);
+    if (placeholder.drainTimeout !== null) window.clearTimeout(placeholder.drainTimeout);
+    placeholder.renderFrame = null;
+    placeholder.drainTimeout = null;
+    placeholder.pendingMarkdown = "";
+    resolveAnswerTextDrain(placeholder);
+  };
+
   const queueAnswerTextDelta = (placeholder, delta) => {
     if (!placeholder || typeof delta !== "string" || !delta) return;
     if (!placeholder.started) {
@@ -974,13 +1057,8 @@
       messagesEl.addEventListener("wheel", placeholder.stopFollowing, { passive: true });
       messagesEl.addEventListener("touchmove", placeholder.stopFollowing, { passive: true });
     }
-    placeholder.streamedMarkdown += delta;
-    if (placeholder.renderFrame !== null) return;
-    placeholder.renderFrame = window.requestAnimationFrame(() => {
-      placeholder.renderFrame = null;
-      renderMarkdown(placeholder.answerBody, placeholder.streamedMarkdown);
-      if (placeholder.followAnswer) scrollToBottom();
-    });
+    placeholder.pendingMarkdown += delta;
+    scheduleAnswerTextFrame(placeholder);
   };
 
   const updateAnswerPlaceholder = (placeholder, type, data) => {
@@ -1187,10 +1265,7 @@
 
   const finalizeStreamedAnswer = async (parent, placeholder, answer) => {
     detachStreamFollowing(placeholder);
-    if (placeholder.renderFrame !== null) {
-      window.cancelAnimationFrame(placeholder.renderFrame);
-      placeholder.renderFrame = null;
-    }
+    cancelAnswerText(placeholder);
     if (!placeholder.started) {
       placeholder.root.remove();
       const answerBody = addText(parent, "div", "answer-body markdown-body", "");
@@ -1542,6 +1617,21 @@
       content: message.content.slice(0, 12000),
     }));
 
+  const chatContextMessages = (session) => {
+    const candidates = session.messages
+      .filter((message) => ["user", "assistant"].includes(message.role) && typeof message.content === "string")
+      .slice(-12);
+    const selected = [];
+    let remainingCharacters = 48000;
+    for (let index = candidates.length - 1; index >= 0 && remainingCharacters > 0; index -= 1) {
+      const content = candidates[index].content.trim().slice(0, Math.min(12000, remainingCharacters));
+      if (!content) continue;
+      selected.unshift({ role: candidates[index].role, content });
+      remainingCharacters -= content.length;
+    }
+    return selected;
+  };
+
   const generateTitle = async (session, firstQuestion) => {
     if (session.title !== DEFAULT_TITLE) return;
     try {
@@ -1594,6 +1684,7 @@
     if (!session) session = await createSession({ replaceLocation: true });
     if (!session) return;
     setBusy(true);
+    const history = chatContextMessages(session);
     const userMessage = {
       id: makeId(),
       role: "user",
@@ -1618,7 +1709,7 @@
     try {
       const response = await api("/api/chat/stream", {
         method: "POST",
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ question, history }),
       });
       await parseSSE(response, async (type, data) => {
         if (type !== "answer_text_delta") appendTrace(trace, type, data);
@@ -1638,6 +1729,7 @@
           });
           session.updatedAt = completedAt;
           await putSession(session);
+          await waitForAnswerTextDrain(placeholder);
           await finalizeStreamedAnswer(assistant, placeholder, data.answer);
           window.setTimeout(() => {
             if (trace.details.classList.contains("is-complete")) trace.details.open = false;
@@ -1645,10 +1737,7 @@
         }
         if (type === "error") {
           detachStreamFollowing(placeholder);
-          if (placeholder.renderFrame !== null) {
-            window.cancelAnimationFrame(placeholder.renderFrame);
-            placeholder.renderFrame = null;
-          }
+          cancelAnswerText(placeholder);
           placeholder.root.remove();
           placeholder.answerBody.remove();
           assistant.classList.remove("is-thinking");
@@ -1665,10 +1754,7 @@
       }
     } catch (error) {
       detachStreamFollowing(placeholder);
-      if (placeholder.renderFrame !== null) {
-        window.cancelAnimationFrame(placeholder.renderFrame);
-        placeholder.renderFrame = null;
-      }
+      cancelAnswerText(placeholder);
       placeholder.root.remove();
       placeholder.answerBody.remove();
       assistant.classList.remove("is-thinking");
