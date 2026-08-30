@@ -110,6 +110,24 @@ class NavigationService:
             self.settings,
             answer_client=answer_client,
         )
+        root_responses = await self._select_folders(
+            model_question,
+            root,
+            client,
+            budget,
+        )
+        intent = _consensus_intent(root_responses)
+        if intent is NavigationIntent.SMALL_TALK:
+            return NavigationResult(
+                intent=intent,
+                folders=[],
+                documents=[],
+                parts=[],
+                display_steps=["Classified the request as conversation-only."],
+                confidence=1.0,
+                need_more_information=False,
+                token_budget=budget,
+            )
         try:
             lexical_candidates = search_lexical_index(
                 generation_dir / LEXICAL_INDEX_FILENAME,
@@ -119,14 +137,6 @@ class NavigationService:
             )
         except LexicalIndexError as exc:
             raise NavigationIndexError("The local lexical index is invalid") from exc
-
-        root_responses = await self._select_folders(
-            model_question,
-            root,
-            client,
-            budget,
-        )
-        intent = _consensus_intent(root_responses)
         root_entries = {entry["folder_id"]: entry for entry in root["folders"]}
         valid_root_candidates = [
             candidate
@@ -1115,6 +1125,10 @@ def _root_prompt(
 ) -> str:
     return (
         f"{instruction or default_role_prompts(ModelRole.QUERY_ROUTER)['folder_selection']}\n\n"
+        "Mandatory intent contract: return one of answer, download, list_files, or "
+        "small_talk. Use small_talk only for a purely social/casual request that "
+        "needs no knowledge-base fact; then select no folders and set "
+        "need_more_information to false.\n\n"
         f"user_question:\n{question}\n\n"
         "current_root_json:\n"
         f"{json.dumps(root, ensure_ascii=False, separators=(',', ':'))}"

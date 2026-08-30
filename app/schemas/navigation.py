@@ -14,6 +14,7 @@ class NavigationIntent(StrEnum):
     ANSWER = "answer"
     DOWNLOAD = "download"
     LIST_FILES = "list_files"
+    SMALL_TALK = "small_talk"
 
 
 class FolderSelection(NavigationSchema):

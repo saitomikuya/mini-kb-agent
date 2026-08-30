@@ -306,6 +306,39 @@ def test_follow_up_history_is_included_in_every_router_prompt(tmp_path: Path) ->
     assert all("产品A的规格是什么" in prompt for prompt in client.prompts)
 
 
+def test_small_talk_intent_stops_before_document_or_lexical_navigation(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    _write_navigation_index(
+        settings,
+        {"products": [{"document_id": "1", "title": "问候语规范"}]},
+    )
+    client = RecordingRouterClient(
+        lambda prompt, _call: (
+            {
+                "intent": "small_talk",
+                "selected_folders": [],
+                "display_reason": "这是无需检索资料的寒暄。",
+                "need_more_information": False,
+            }
+            if "phase 1" in prompt
+            else pytest.fail("small talk must not enter document selection")
+        )
+    )
+
+    result, roles = _run_navigation(settings, client, question="你好😊")
+
+    assert roles == [ModelRole.QUERY_ROUTER]
+    assert result.intent is NavigationIntent.SMALL_TALK
+    assert result.folders == []
+    assert result.documents == []
+    assert result.parts == []
+    assert result.need_more_information is False
+    assert len(client.prompts) == 1
+    assert "small_talk" in client.prompts[0]
+
+
 def test_lexical_recall_bypasses_wrong_root_choice_and_falls_back_to_exact_part(
     tmp_path: Path,
 ) -> None:

@@ -25,6 +25,7 @@ from app.schemas.navigation import (
     NavigationTokenBudget,
 )
 from app.services.chat import human_source_location, public_answer_payload
+from app.services.conversation import detect_small_talk, small_talk_answer
 import app.models  # noqa: F401  # Register complete SQLAlchemy metadata.
 
 
@@ -224,6 +225,49 @@ class FailingAnswering(FakeAnswering):
         conversation_history: Any = (),
     ) -> AnswerResult:
         raise RuntimeError("provider secret must not be exposed")
+
+
+class NeverCalledAnswering(FakeAnswering):
+    async def navigate(
+        self,
+        _question: str,
+        *,
+        conversation_history: Any = (),
+    ) -> NavigationResult:
+        pytest.fail("local small-talk handling must skip knowledge navigation")
+
+    async def generate_answer(
+        self,
+        _question: str,
+        _navigation_result: NavigationResult,
+        *,
+        conversation_history: Any = (),
+    ) -> AnswerResult:
+        pytest.fail("local small-talk handling must skip answer generation")
+
+
+class RouterSmallTalkAnswering(FakeAnswering):
+    async def navigate(
+        self,
+        _question: str,
+        *,
+        conversation_history: Any = (),
+    ) -> NavigationResult:
+        navigation = _navigation().model_copy(deep=True)
+        navigation.intent = NavigationIntent.SMALL_TALK
+        navigation.folders = []
+        navigation.documents = []
+        navigation.parts = []
+        return navigation
+
+    async def generate_answer(
+        self,
+        _question: str,
+        _navigation_result: NavigationResult,
+        *,
+        conversation_history: Any = (),
+    ) -> AnswerResult:
+        pytest.fail("router-classified small talk must skip answer generation")
 
 
 class HistoryRecordingAnswering(FakeAnswering):
@@ -446,6 +490,79 @@ def test_sse_order_is_stateless_and_display_only_download_path(
         assert session.scalar(select(func.count(ChatSession.id))) == 0
         assert session.scalar(select(func.count(Message.id))) == 0
         assert session.scalar(select(func.count(ChatEvent.id))) == 0
+
+
+@pytest.mark.parametrize(
+    ("question", "kind"),
+    [
+        ("你好", "greeting"),
+        ("您好呀！", "greeting"),
+        ("hello", "greeting"),
+        ("谢谢你", "thanks"),
+        ("再见", "farewell"),
+        ("你是谁？", "capability"),
+    ],
+)
+def test_unambiguous_social_messages_are_detected_locally(
+    question: str,
+    kind: str,
+) -> None:
+    assert detect_small_talk(question) == kind
+
+
+def test_greeting_with_a_real_question_is_not_swallowed() -> None:
+    assert detect_small_talk("你好，请问产品A的规格是什么？") is None
+
+
+def test_greeting_skips_knowledge_navigation_and_returns_source_free_answer(
+    tmp_path: Path,
+) -> None:
+    client_iterator = _client(tmp_path, NeverCalledAnswering())
+    client = next(client_iterator)
+    try:
+        response = client.post("/api/chat/stream", json={"question": "你好"})
+        events = _sse_events(response.text)
+
+        assert [event_type for event_type, _data in events] == [
+            "request_received",
+            "intent_detected",
+            "completed",
+        ]
+        assert events[0][1]["message"] == "已收到消息"
+        assert events[1][1] == {
+            "type": "intent_detected",
+            "message": "已识别为寒暄或闲聊请求",
+            "intent": "small_talk",
+        }
+        assert events[2][1]["answer"] == small_talk_answer("你好").model_dump(
+            mode="json"
+        )
+    finally:
+        client_iterator.close()
+
+
+def test_router_small_talk_fallback_skips_evidence_steps_and_answer_model(
+    tmp_path: Path,
+) -> None:
+    client_iterator = _client(tmp_path, RouterSmallTalkAnswering())
+    client = next(client_iterator)
+    try:
+        response = client.post(
+            "/api/chat/stream",
+            json={"question": "陪我随便聊两句"},
+        )
+        events = _sse_events(response.text)
+
+        assert [event_type for event_type, _data in events] == [
+            "request_received",
+            "navigation_started",
+            "intent_detected",
+            "completed",
+        ]
+        assert events[2][1]["message"] == "已识别为寒暄或闲聊请求"
+        assert events[3][1]["answer"]["citations"] == []
+    finally:
+        client_iterator.close()
 
 
 def test_sse_forwards_safe_model_progress_without_raw_reasoning(tmp_path: Path) -> None:

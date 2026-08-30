@@ -25,7 +25,12 @@ from app.schemas.answers import (
     ConflictValue,
     Download,
 )
-from app.schemas.navigation import NavigatedPart, NavigationResult
+from app.schemas.navigation import (
+    NavigatedPart,
+    NavigationIntent,
+    NavigationResult,
+)
+from app.services.conversation import small_talk_answer
 from app.services.navigation import NavigationService
 from app.source_files import SourceStatus
 
@@ -410,6 +415,11 @@ class QuestionAnsweringService:
         *,
         conversation_history: Sequence[Mapping[str, str]] = (),
     ) -> AnswerResult:
+        if navigation.intent is NavigationIntent.SMALL_TALK:
+            return small_talk_answer(
+                question,
+                app_name=self.navigation.settings.app_name,
+            )
         return await self.answer_generation.generate(
             question,
             navigation,
@@ -424,6 +434,11 @@ class QuestionAnsweringService:
         on_progress: ModelProgressCallback,
         conversation_history: Sequence[Mapping[str, str]] = (),
     ) -> AnswerResult:
+        if navigation.intent is NavigationIntent.SMALL_TALK:
+            return small_talk_answer(
+                question,
+                app_name=self.navigation.settings.app_name,
+            )
         return await self.answer_generation.generate_with_progress(
             question,
             navigation,

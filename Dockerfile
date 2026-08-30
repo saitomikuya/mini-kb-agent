@@ -3,7 +3,7 @@ FROM python:3.12-slim
 LABEL org.opencontainers.image.title="mini-kb-agent" \
       org.opencontainers.image.description="Lightweight multimodal knowledge QA without embeddings or a vector database" \
       org.opencontainers.image.source="https://github.com/saitomikuya/mini-kb-agent" \
-      org.opencontainers.image.version="0.8.0"
+      org.opencontainers.image.version="0.8.1"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

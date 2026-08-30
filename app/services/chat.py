@@ -20,6 +20,7 @@ def navigation_event_payloads(
         NavigationIntent.ANSWER: "已识别为知识问答请求",
         NavigationIntent.DOWNLOAD: "已识别为文件下载请求",
         NavigationIntent.LIST_FILES: "已识别为文件查询请求",
+        NavigationIntent.SMALL_TALK: "已识别为寒暄或闲聊请求",
     }
     payloads: list[tuple[str, dict[str, Any]]] = [
         (
@@ -29,6 +30,11 @@ def navigation_event_payloads(
                 "intent": navigation.intent.value,
             },
         ),
+    ]
+    if navigation.intent is NavigationIntent.SMALL_TALK:
+        return payloads
+
+    payloads.append(
         (
             "folders_selected",
             {
@@ -46,8 +52,8 @@ def navigation_event_payloads(
                     for folder in navigation.folders
                 ],
             },
-        ),
-    ]
+        )
+    )
     payloads.append(
         (
             "documents_selected",

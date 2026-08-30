@@ -27,8 +27,9 @@ from app.schemas.chat import (
     ChatTitleRequest,
     ChatTitleResponse,
 )
-from app.schemas.navigation import NavigationResult
+from app.schemas.navigation import NavigationIntent, NavigationResult
 from app.services.answer_generation import QuestionAnsweringService
+from app.services.conversation import detect_small_talk, small_talk_answer
 from app.services.tuning import effective_settings
 from app.services.chat import navigation_event_payloads, public_answer_payload
 
@@ -162,8 +163,31 @@ async def _completion_stream(
 ) -> AsyncIterator[str]:
     yield _sse(
         "request_received",
-        {"message": "已收到问题"},
+        {"message": "已收到消息"},
     )
+
+    if detect_small_talk(question) is not None:
+        yield _sse(
+            "intent_detected",
+            {
+                "message": "已识别为寒暄或闲聊请求",
+                "intent": NavigationIntent.SMALL_TALK.value,
+            },
+        )
+        yield _sse(
+            "completed",
+            {
+                "message": "回答完成",
+                "answer": public_answer_payload(
+                    small_talk_answer(
+                        question,
+                        app_name=request.app.state.settings.app_name,
+                    ),
+                    request.app.state.settings,
+                ),
+            },
+        )
+        return
 
     session = request.app.state.session_factory()
     try:
@@ -210,6 +234,22 @@ async def _completion_stream(
                     await navigation_task
         for event_type, event_data in navigation_event_payloads(navigation):
             yield _sse(event_type, event_data)
+
+        if navigation.intent is NavigationIntent.SMALL_TALK:
+            yield _sse(
+                "completed",
+                {
+                    "message": "回答完成",
+                    "answer": public_answer_payload(
+                        small_talk_answer(
+                            question,
+                            app_name=request.app.state.settings.app_name,
+                        ),
+                        request.app.state.settings,
+                    ),
+                },
+            )
+            return
 
         answer_data = {
             "message": "正在根据相关资料整理回答",

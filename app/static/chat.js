@@ -151,7 +151,7 @@
     request_received: {
       progress: 8,
       title: "正在启动处理",
-      subtitle: "问题已接收，正在准备检索",
+      subtitle: "消息已接收，正在识别请求类型",
     },
     navigation_started: {
       progress: 14,
