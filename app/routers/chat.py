@@ -161,11 +161,6 @@ async def _completion_stream(
     question: str,
     conversation_history: Sequence[Mapping[str, str]] = (),
 ) -> AsyncIterator[str]:
-    yield _sse(
-        "request_received",
-        {"message": "已收到消息"},
-    )
-
     if detect_small_talk(question) is not None:
         yield _sse(
             "intent_detected",

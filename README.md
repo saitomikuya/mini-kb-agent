@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-one--container-2496ED?logo=docker&logoColor=white)
 ![No Vector DB](https://img.shields.io/badge/Vector_DB-not_required-2E7D32)
-![Tests](https://img.shields.io/badge/tests-164_passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-178_passed-brightgreen)
 
 [Docker Hub：`saitomikuya/mini-kb-agent`](https://hub.docker.com/r/saitomikuya/mini-kb-agent)
 

@@ -148,11 +148,6 @@
   };
 
   const tracePresentation = {
-    request_received: {
-      progress: 8,
-      title: "正在启动处理",
-      subtitle: "消息已接收，正在识别请求类型",
-    },
     navigation_started: {
       progress: 14,
       title: "正在分析问题",
@@ -773,9 +768,9 @@
 
   const appendTrace = (trace, type, data = {}, historical = false) => {
     const displayMessage = data.message || type;
-    // Older locally stored conversations can contain these implementation-level
-    // events. Keep their history readable using the same concise projection.
-    if (["root_index_loaded", "folder_index_loaded", "document_loading"].includes(type)) {
+    // Older locally stored conversations can contain these redundant or
+    // implementation-level events. Omit them from the concise public trace.
+    if (["request_received", "root_index_loaded", "folder_index_loaded", "document_loading"].includes(type)) {
       return null;
     }
     if (["navigation_waiting", "intent_detected"].includes(type)) {
@@ -827,6 +822,39 @@
       trace.subtitle.textContent = presentation.subtitle;
       setTraceProgress(trace, presentation.progress);
       return null;
+    }
+    if (type === "documents_selected") {
+      const folderItem = trace.list.querySelector('[data-event-type="folders_selected"]');
+      if (folderItem) {
+        const folderMessage = folderItem.querySelector(".trace-item-text")?.textContent || "";
+        const combinedMessage = /^(?:已定位资料范围|未定位到相关资料目录)/.test(displayMessage)
+          ? displayMessage
+          : `${folderMessage}，${displayMessage}`;
+        folderItem.dataset.eventType = type;
+        folderItem.querySelector(".trace-item-text")?.remove();
+        const details = document.createElement("details");
+        details.className = "trace-item-details";
+        addText(details, "summary", "trace-item-text", combinedMessage);
+        if (Array.isArray(data.documents) && data.documents.length) {
+          const sources = document.createElement("ul");
+          sources.className = "trace-source-list";
+          data.documents.forEach((documentData) => {
+            const sourcePath = documentData?.source_path || documentData?.title;
+            if (sourcePath) addText(sources, "li", "", sourcePath);
+          });
+          details.append(sources);
+        }
+        folderItem.append(details);
+        folderItem.classList.remove("is-current");
+        folderItem.classList.add("is-complete");
+        const presentation = tracePresentation[type];
+        trace.currentType = type;
+        if (!historical) trace.phaseStartedAt = Date.now();
+        trace.title.textContent = presentation.title;
+        trace.subtitle.textContent = combinedMessage || presentation.subtitle;
+        setTraceProgress(trace, presentation.progress);
+        return folderItem;
+      }
     }
     const coalescedTypes = new Set([
       "navigation_waiting",

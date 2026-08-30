@@ -58,7 +58,15 @@ def navigation_event_payloads(
         (
             "documents_selected",
             {
-                "message": f"找到 {len(navigation.documents)} 个可能相关文件",
+                "message": (
+                    f"已定位资料范围：{len(navigation.folders)} 个资料目录，"
+                    f"找到 {len(navigation.documents)} 个可能相关文件"
+                    if navigation.folders
+                    else (
+                        "未定位到相关资料目录，"
+                        f"找到 {len(navigation.documents)} 个可能相关文件"
+                    )
+                ),
                 "count": len(navigation.documents),
                 "documents": [
                     {

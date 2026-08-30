@@ -425,6 +425,8 @@ def test_root_directly_renders_public_chat_login_and_local_history_ui(
     assert "chatContextMessages" in chat_script.text
     assert "JSON.stringify({ question, history })" in chat_script.text
     assert "finalizeStreamedAnswer" in chat_script.text
+    assert '["request_received", "root_index_loaded"' in chat_script.text
+    assert "folderItem.dataset.eventType = type" in chat_script.text
     assert 'type !== "answer_text_delta"' in chat_script.text
     assert "window.requestAnimationFrame" in chat_script.text
     assert 'classList.remove("is-streaming")' in chat_script.text
@@ -455,7 +457,6 @@ def test_sse_order_is_stateless_and_display_only_download_path(
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _sse_events(response.text)
     assert [event_type for event_type, _data in events] == [
-        "request_received",
         "navigation_started",
         "intent_detected",
         "folders_selected",
@@ -465,10 +466,13 @@ def test_sse_order_is_stateless_and_display_only_download_path(
         "download_ready",
         "completed",
     ]
-    assert events[3][1]["message"] == "已定位资料范围：1 个资料目录"
-    assert events[4][1]["documents"][0]["title"] == "产品A规格书"
-    assert events[4][1]["documents"][0]["source_path"] == "产品资料/产品A规格书.pdf"
-    assert events[5][1]["message"] == "正在根据相关资料整理回答"
+    assert events[2][1]["message"] == "已定位资料范围：1 个资料目录"
+    assert events[3][1]["message"] == (
+        "已定位资料范围：1 个资料目录，找到 1 个可能相关文件"
+    )
+    assert events[3][1]["documents"][0]["title"] == "产品A规格书"
+    assert events[3][1]["documents"][0]["source_path"] == "产品资料/产品A规格书.pdf"
+    assert events[4][1]["message"] == "正在根据相关资料整理回答"
     assert "Markdown" not in response.text
     assert "分片" not in response.text
 
@@ -524,17 +528,15 @@ def test_greeting_skips_knowledge_navigation_and_returns_source_free_answer(
         events = _sse_events(response.text)
 
         assert [event_type for event_type, _data in events] == [
-            "request_received",
             "intent_detected",
             "completed",
         ]
-        assert events[0][1]["message"] == "已收到消息"
-        assert events[1][1] == {
+        assert events[0][1] == {
             "type": "intent_detected",
             "message": "已识别为寒暄或闲聊请求",
             "intent": "small_talk",
         }
-        assert events[2][1]["answer"] == small_talk_answer("你好").model_dump(
+        assert events[1][1]["answer"] == small_talk_answer("你好").model_dump(
             mode="json"
         )
     finally:
@@ -554,13 +556,12 @@ def test_router_small_talk_fallback_skips_evidence_steps_and_answer_model(
         events = _sse_events(response.text)
 
         assert [event_type for event_type, _data in events] == [
-            "request_received",
             "navigation_started",
             "intent_detected",
             "completed",
         ]
-        assert events[2][1]["message"] == "已识别为寒暄或闲聊请求"
-        assert events[3][1]["answer"]["citations"] == []
+        assert events[1][1]["message"] == "已识别为寒暄或闲聊请求"
+        assert events[2][1]["answer"]["citations"] == []
     finally:
         client_iterator.close()
 
