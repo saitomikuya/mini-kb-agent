@@ -768,7 +768,7 @@
   const jobItemFile = (item) => state.files.find((file) => file.id === item.source_file_id);
   const progressPhaseLabel = (phase) => ({
     preparing: "准备文件", extracting: "提取内容", analyzing: "分析页面", visual_enrichment: "识别视觉内容",
-    legacy_office_conversion: "转换旧版 Word",
+    legacy_office_conversion: "转换/规范化旧版 Office",
     table_extraction: "提取表格", extracted: "提取完成", writing: "写入 Markdown", publishing: "发布产物", completed: "已完成",
     inventory: "盘点可索引文档", document_cards: "生成文档卡片", folder_indexes: "更新文件夹索引", validating: "验证新索引", failed: "生成失败",
   }[phase] || phase || "等待开始");

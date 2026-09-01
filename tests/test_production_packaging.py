@@ -23,6 +23,7 @@ def test_docker_and_supervisor_contract() -> None:
     assert "HEALTHCHECK" in dockerfile
     assert "http://127.0.0.1:8080/health" in dockerfile
     assert "libreoffice-writer" in dockerfile
+    assert "libreoffice-impress" in dockerfile
     assert "fonts-noto-cjk" in dockerfile
     assert "python -m uvicorn app.main:app --host 0.0.0.0 --port 8080" in supervisor
     assert "--proxy-headers --forwarded-allow-ips=*" in supervisor

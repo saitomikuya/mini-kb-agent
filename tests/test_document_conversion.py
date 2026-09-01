@@ -386,6 +386,96 @@ def test_legacy_doc_is_converted_through_libreoffice_bridge(
     assert "旧版方案" in (artifact / "part-001.md").read_text(encoding="utf-8")
 
 
+def test_misnamed_ooxml_ppt_is_normalized_without_libreoffice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(data_dir=tmp_path / "data", source_dir=tmp_path / "sources")
+    settings.source_dir.mkdir(parents=True)
+    source_path = settings.source_dir / "mislabeled.ppt"
+    with zipfile.ZipFile(source_path, "w") as package:
+        package.writestr("[Content_Types].xml", "<Types/>")
+        package.writestr("ppt/presentation.xml", "<presentation/>")
+    source_bytes = source_path.read_bytes()
+
+    def fake_extract_pptx(
+        _engine: DocumentConversionEngine,
+        normalized_path: Path,
+        heartbeat: Callable[[], None],
+    ) -> list[PartDraft]:
+        assert normalized_path.suffix == ".pptx"
+        assert normalized_path.read_bytes() == source_bytes
+        heartbeat()
+        return [PartDraft(body="# Normalized presentation", anchors={"slide": 1})]
+
+    monkeypatch.setattr(DocumentConversionEngine, "_extract_pptx", fake_extract_pptx)
+    engine = DocumentConversionEngine(
+        settings,
+        model_resolver=lambda role: pytest.fail(f"unexpected model role: {role}"),
+    )
+    source = SourceDocument(
+        document_id=1,
+        source_path=source_path.name,
+        source_sha256=hashlib.sha256(source_bytes).hexdigest(),
+        path=source_path,
+    )
+
+    staged = engine.stage(source, job_id=1)
+
+    assert staged.part_count == 1
+    assert source_path.read_bytes() == source_bytes
+
+
+def test_binary_ppt_is_converted_through_libreoffice_bridge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(data_dir=tmp_path / "data", source_dir=tmp_path / "sources")
+    settings.source_dir.mkdir(parents=True)
+    source_path = settings.source_dir / "legacy.ppt"
+    source_path.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1legacy-powerpoint")
+
+    def fake_libreoffice(
+        _engine: DocumentConversionEngine,
+        _path: Path,
+        output_dir: Path,
+        heartbeat: Callable[[], None],
+    ) -> Path:
+        converted = output_dir / "legacy.pptx"
+        converted.write_bytes(b"converted-powerpoint")
+        heartbeat()
+        return converted
+
+    def fake_extract_pptx(
+        _engine: DocumentConversionEngine,
+        converted_path: Path,
+        _heartbeat: Callable[[], None],
+    ) -> list[PartDraft]:
+        assert converted_path.read_bytes() == b"converted-powerpoint"
+        return [PartDraft(body="# Converted presentation", anchors={"slide": 1})]
+
+    monkeypatch.setattr(
+        DocumentConversionEngine,
+        "_convert_legacy_ppt_to_pptx",
+        fake_libreoffice,
+    )
+    monkeypatch.setattr(DocumentConversionEngine, "_extract_pptx", fake_extract_pptx)
+    engine = DocumentConversionEngine(
+        settings,
+        model_resolver=lambda role: pytest.fail(f"unexpected model role: {role}"),
+    )
+    source = SourceDocument(
+        document_id=1,
+        source_path=source_path.name,
+        source_sha256=hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        path=source_path,
+    )
+
+    staged = engine.stage(source, job_id=1)
+
+    assert staged.part_count == 1
+
+
 def test_conversion_failure_isolated_and_previous_artifact_not_published(
     conversion_infra: ConversionInfra,
 ) -> None:
@@ -524,7 +614,7 @@ def test_oversized_anchored_draft_is_split_with_stable_segment_locations(
     manifest = json.loads((staged.staging_dir / "manifest.json").read_text())
 
     assert staged.part_count > 1
-    assert manifest["converter_version"] == "document-conversion-v3"
+    assert manifest["converter_version"] == "document-conversion-v4"
     assert manifest["parts"][0]["anchors"]["page"] == 7
     assert manifest["parts"][0]["anchors"]["segment"].startswith("1/")
     assert manifest["parts"][-1]["anchors"]["segment"].split("/")[0] == str(
@@ -771,13 +861,54 @@ def test_visual_enrichment_degrades_legacy_wmf_without_failing_document(
     client = VisionClient()
     engine = DocumentConversionEngine(settings, model_resolver=lambda _role: client)
 
+    emf_mislabeled_as_png = (
+        b"\x01\x00\x00\x00" + (b"\x00" * 36) + b" EMF"
+    )
+    wmf_mislabeled_as_png = b"\x01\x00\x09\x00\x00\x03legacy-vector"
     results = engine._visual_enrichments(
-        [(_png_bytes(), "image/png"), (b"legacy vector bytes", "image/wmf")]
+        [
+            (_png_bytes(), "image/png"),
+            (emf_mislabeled_as_png, "image/png"),
+            (wmf_mislabeled_as_png, "image/png"),
+        ]
     )
 
     assert results[0] == "supported image evidence"
     assert "legacy WMF/EMF" in results[1]
+    assert "legacy WMF/EMF" in results[2]
     assert client.calls == 1
+
+
+def test_embedded_visual_normalization_failure_does_not_fail_document(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(data_dir=tmp_path / "data", source_dir=tmp_path / "sources")
+
+    class VisionClient:
+        context_window = 128_000
+        max_output_tokens = 4_096
+        calls = 0
+
+        async def generate_multimodal(self, *_args, **_kwargs) -> TextGeneration:
+            self.calls += 1
+            return TextGeneration(
+                text="supported image evidence",
+                protocol=Protocol.RESPONSES,
+                latency_ms=1,
+            )
+
+    client = VisionClient()
+    engine = DocumentConversionEngine(settings, model_resolver=lambda _role: client)
+
+    results = engine._visual_enrichments(
+        [(_png_bytes(), "image/png"), (b"not-an-image", "image/png")],
+        allow_partial_failures=True,
+    )
+
+    assert results[0] == "supported image evidence"
+    assert "could not be decoded" in results[1]
+    assert client.calls == 1
+    assert engine._last_visual_stats["failed_items"] == 1
 
 
 def test_visual_enrichment_caches_successes_across_retries(tmp_path: Path) -> None:

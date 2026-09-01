@@ -43,7 +43,7 @@ from app.llm.registry import ModelRegistryError
 from app.llm.types import ModelRole
 
 
-CONVERTER_VERSION = "document-conversion-v3"
+CONVERTER_VERSION = "document-conversion-v4"
 EXCEL_ROWS_PER_PART = DEFAULT_DOCUMENT_EXCEL_ROWS_PER_PART
 # A bounded Markdown part is the atomic retrieval/evidence unit. 8K characters
 # is typically about 2K tokens for Latin text and at most about 8K tokens for
@@ -51,7 +51,7 @@ EXCEL_ROWS_PER_PART = DEFAULT_DOCUMENT_EXCEL_ROWS_PER_PART
 TEXT_CHARS_PER_PART = DEFAULT_DOCUMENT_TEXT_CHARS_PER_PART
 HEARTBEAT_INTERVAL_SECONDS = 15.0
 MODEL_REQUEST_TIMEOUT_SECONDS = 120.0
-LEGACY_DOC_CONVERSION_TIMEOUT_SECONDS = 300.0
+LEGACY_OFFICE_CONVERSION_TIMEOUT_SECONDS = 300.0
 VISUAL_REQUEST_MAX_ATTEMPTS = 3
 VISUAL_RETRY_BASE_DELAY_SECONDS = 1.0
 VISUAL_CACHE_VERSION = "visual-evidence-v1"
@@ -71,6 +71,10 @@ VISUAL_REQUEST_FALLBACK = (
     "**Embedded visual unavailable:** the vision service could not analyze this "
     "embedded image after retries; no visual details were inferred."
 )
+VISUAL_NORMALIZATION_FALLBACK = (
+    "**Embedded visual unavailable:** this embedded image could not be decoded; "
+    "no visual details were inferred."
+)
 PDF_TEXT_MIN_CHARACTERS = 40
 PDF_RENDER_SCALE = 1.5
 SUPPORTED_EXTENSIONS = frozenset(
@@ -78,6 +82,7 @@ SUPPORTED_EXTENSIONS = frozenset(
         ".pdf",
         ".doc",
         ".docx",
+        ".ppt",
         ".pptx",
         ".xlsx",
         ".xls",
@@ -399,6 +404,8 @@ class DocumentConversionEngine:
             return self._extract_pdf(path, heartbeat)
         if extension == ".doc":
             return self._extract_legacy_doc(path, heartbeat)
+        if extension == ".ppt":
+            return self._extract_legacy_ppt(path, heartbeat)
         if extension == ".pptx":
             return self._extract_pptx(path, heartbeat)
         if extension in {".txt", ".md"}:
@@ -438,10 +445,63 @@ class DocumentConversionEngine:
         output_dir: Path,
         heartbeat: Heartbeat,
     ) -> Path:
+        return self._convert_legacy_office_file(
+            path,
+            output_dir,
+            heartbeat,
+            output_extension=".docx",
+            source_label="legacy .doc",
+        )
+
+    def _extract_legacy_ppt(
+        self,
+        path: Path,
+        heartbeat: Heartbeat,
+    ) -> list[PartDraft]:
+        """Normalize mislabeled OOXML or convert binary PowerPoint to PPTX."""
+        self._emit_progress(phase="legacy_office_conversion")
+        with tempfile.TemporaryDirectory(prefix="mini-kb-legacy-ppt-") as temp_dir:
+            output_dir = Path(temp_dir)
+            if _is_ooxml_presentation(path):
+                converted_path = output_dir / f"{path.stem}.pptx"
+                shutil.copyfile(path, converted_path)
+                heartbeat()
+            else:
+                converted_path = self._convert_legacy_ppt_to_pptx(
+                    path,
+                    output_dir,
+                    heartbeat,
+                )
+            return self._extract_pptx(converted_path, heartbeat)
+
+    def _convert_legacy_ppt_to_pptx(
+        self,
+        path: Path,
+        output_dir: Path,
+        heartbeat: Heartbeat,
+    ) -> Path:
+        return self._convert_legacy_office_file(
+            path,
+            output_dir,
+            heartbeat,
+            output_extension=".pptx",
+            source_label="legacy .ppt",
+        )
+
+    def _convert_legacy_office_file(
+        self,
+        path: Path,
+        output_dir: Path,
+        heartbeat: Heartbeat,
+        *,
+        output_extension: str,
+        source_label: str,
+    ) -> Path:
         executable = shutil.which("libreoffice") or shutil.which("soffice")
         if executable is None:
             raise DocumentConversionError(
-                "Legacy .doc conversion requires LibreOffice, but it is not installed"
+                f"{source_label.capitalize()} conversion requires LibreOffice, but it "
+                "is not installed"
             )
 
         profile_dir = output_dir / "libreoffice-profile"
@@ -451,7 +511,7 @@ class DocumentConversionEngine:
             f"-env:UserInstallation={profile_dir.resolve().as_uri()}",
             "--headless",
             "--convert-to",
-            "docx",
+            output_extension.removeprefix("."),
             "--outdir",
             str(output_dir),
             str(path),
@@ -465,12 +525,12 @@ class DocumentConversionEngine:
             )
         except OSError as exc:
             raise DocumentConversionError(
-                "Could not start LibreOffice for legacy .doc conversion"
+                f"Could not start LibreOffice for {source_label} conversion"
             ) from exc
 
         deadline = (
             monotonic_clock.monotonic()
-            + LEGACY_DOC_CONVERSION_TIMEOUT_SECONDS
+            + LEGACY_OFFICE_CONVERSION_TIMEOUT_SECONDS
         )
         stdout = stderr = ""
         try:
@@ -480,7 +540,7 @@ class DocumentConversionEngine:
                     process.kill()
                     process.communicate()
                     raise DocumentConversionError(
-                        "Legacy .doc conversion timed out in LibreOffice"
+                        f"{source_label.capitalize()} conversion timed out in LibreOffice"
                     )
                 try:
                     stdout, stderr = process.communicate(
@@ -498,17 +558,18 @@ class DocumentConversionEngine:
         if process.returncode != 0:
             detail = (stderr or stdout).strip().replace("\n", " ")[-500:]
             raise DocumentConversionError(
-                "LibreOffice could not convert the legacy .doc file"
+                f"LibreOffice could not convert the {source_label} file"
                 + (f": {detail}" if detail else "")
             )
         candidates = [
             candidate
-            for candidate in output_dir.glob("*.docx")
+            for candidate in output_dir.glob(f"*{output_extension}")
             if candidate.is_file()
         ]
         if len(candidates) != 1:
             raise DocumentConversionError(
-                "LibreOffice reported success but produced no usable DOCX file"
+                "LibreOffice reported success but produced no usable "
+                f"{output_extension.upper().removeprefix('.')} file"
             )
         heartbeat()
         return candidates[0]
@@ -1187,8 +1248,16 @@ class DocumentConversionEngine:
         prepared_images: list[tuple[int, bytes, str]] = []
         result_slots: list[str | None] = [None] * len(images)
         legacy_items = 0
+        normalization_failed_items = 0
         for index, (image_bytes, media_type) in enumerate(images):
-            prepared = _prepare_visual_input(image_bytes, media_type)
+            try:
+                prepared = _prepare_visual_input(image_bytes, media_type)
+            except VisualConversionModelError:
+                if not allow_partial_failures:
+                    raise
+                result_slots[index] = VISUAL_NORMALIZATION_FALLBACK
+                normalization_failed_items += 1
+                continue
             if prepared is None:
                 result_slots[index] = LEGACY_VECTOR_FALLBACK
                 legacy_items += 1
@@ -1200,6 +1269,7 @@ class DocumentConversionEngine:
                 "cache_hit_items": 0,
                 "model_requests": 0,
                 "legacy_items": legacy_items,
+                "failed_items": normalization_failed_items,
             }
             return [result for result in result_slots if result is not None]
         try:
@@ -1270,8 +1340,11 @@ class DocumentConversionEngine:
             "cache_hit_items": cache_hit_items,
             "model_requests": len(pending_requests),
             "legacy_items": legacy_items,
+            "failed_items": normalization_failed_items,
         }
-        scope_completed = cache_hit_items + legacy_items
+        scope_completed = (
+            cache_hit_items + legacy_items + normalization_failed_items
+        )
         scope_model_completed = 0
         if progress_scope:
             self._emit_progress(
@@ -1282,7 +1355,7 @@ class DocumentConversionEngine:
                     f"{progress_scope}_model_requests": len(pending_requests),
                     f"{progress_scope}_model_completed": 0,
                     f"{progress_scope}_legacy": legacy_items,
-                    f"{progress_scope}_failed": 0,
+                    f"{progress_scope}_failed": normalization_failed_items,
                 }
             )
         if not pending_requests:
@@ -1373,7 +1446,9 @@ class DocumentConversionEngine:
             raise control_signal
         if failures:
             successful_items = (
-                sum(text is not None for text in result_slots) - legacy_items
+                sum(text is not None for text in result_slots)
+                - legacy_items
+                - normalization_failed_items
             )
             if allow_partial_failures and successful_items:
                 failed_items = 0
@@ -1381,7 +1456,9 @@ class DocumentConversionEngine:
                     failed_items += len(indices)
                     for index in indices:
                         result_slots[index] = VISUAL_REQUEST_FALLBACK
-                self._last_visual_stats["failed_items"] = failed_items
+                self._last_visual_stats["failed_items"] = (
+                    normalization_failed_items + failed_items
+                )
                 if progress_scope:
                     scope_completed += failed_items
                     self._emit_progress(
@@ -1614,7 +1691,7 @@ def _prepare_visual_input(
     media_type: str,
 ) -> tuple[bytes, str] | None:
     """Bound vision payload size while retaining readable document evidence."""
-    if media_type.lower() in LEGACY_VECTOR_MEDIA_TYPES:
+    if _is_legacy_vector_image(image_bytes, media_type):
         return None
     try:
         with Image.open(BytesIO(image_bytes)) as image:
@@ -1652,6 +1729,41 @@ def _prepare_visual_input(
         raise VisualConversionModelError(
             "Embedded visual content could not be normalized for the vision model"
         ) from exc
+
+
+def _is_legacy_vector_image(image_bytes: bytes, media_type: str) -> bool:
+    """Recognize WMF/EMF even when an Office adapter reports the wrong MIME."""
+    normalized_media_type = media_type.partition(";")[0].strip().lower()
+    if normalized_media_type in LEGACY_VECTOR_MEDIA_TYPES:
+        return True
+
+    # Enhanced Metafile header: iType=EMR_HEADER and dSignature=" EMF".
+    if (
+        len(image_bytes) >= 44
+        and image_bytes[:4] == b"\x01\x00\x00\x00"
+        and image_bytes[40:44] == b" EMF"
+    ):
+        return True
+
+    # Placeable WMF magic, or the standard METAHEADER type/size/version tuple.
+    if image_bytes.startswith(b"\xd7\xcd\xc6\x9a"):
+        return True
+    return (
+        len(image_bytes) >= 6
+        and image_bytes[:2] in {b"\x01\x00", b"\x02\x00"}
+        and image_bytes[2:4] == b"\x09\x00"
+        and image_bytes[4:6] in {b"\x00\x01", b"\x00\x03"}
+    )
+
+
+def _is_ooxml_presentation(path: Path) -> bool:
+    """Return whether a .ppt path actually contains a PPTX package."""
+    try:
+        with zipfile.ZipFile(path) as package:
+            names = set(package.namelist())
+    except (OSError, zipfile.BadZipFile):
+        return False
+    return {"[Content_Types].xml", "ppt/presentation.xml"} <= names
 
 
 def _visual_cache_path(markdown_dir: Path, digest: str) -> Path:

@@ -352,7 +352,7 @@ Stage 05 connects persisted jobs to incremental source-to-Markdown conversion:
   CHANGED state, plus FAILED only when retry is explicitly requested;
 - `POST /api/admin/files/{id}/convert` creates an explicit one-file conversion
   job, while READY files remain excluded from automatic incremental work;
-- supported formats are PDF, DOCX, PPTX, XLSX, XLS, CSV, TSV, TXT, MD, HTML,
+- supported formats are PDF, DOC, DOCX, PPT, PPTX, XLSX, XLS, CSV, TSV, TXT, MD, HTML,
   JSON, XML, PNG, JPG, JPEG, and WEBP; other extensions become UNSUPPORTED;
 - local deterministic extraction precedes optional multimodal enrichment;
 - spreadsheet cell/table bodies are read by code and large sheets are split by

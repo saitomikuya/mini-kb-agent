@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-one--container-2496ED?logo=docker&logoColor=white)
 ![No Vector DB](https://img.shields.io/badge/Vector_DB-not_required-2E7D32)
-![Tests](https://img.shields.io/badge/tests-178_passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-181_passed-brightgreen)
 
 [Docker Hub：`saitomikuya/mini-kb-agent`](https://hub.docker.com/r/saitomikuya/mini-kb-agent)
 
@@ -124,7 +124,7 @@ Web、后台 Worker、任务队列和数据库都在同一个容器中。默认�
 
 ## 主要能力
 
-- 支持 PDF、DOC/DOCX、PPTX、XLSX、XLS、CSV、TSV、TXT、MD、HTML、JSON、XML、PNG、JPG/JPEG、WEBP；旧版 DOC 会先由镜像内置的 LibreOffice 转为 DOCX；
+- 支持 PDF、DOC/DOCX、PPT/PPTX、XLSX、XLS、CSV、TSV、TXT、MD、HTML、JSON、XML、PNG、JPG/JPEG、WEBP；旧版 DOC/PPT 会先由镜像内置的 LibreOffice 转为 OOXML，扩展名误写为 `.ppt` 的 PPTX 也会自动识别；
 - 文本可直接提取时优先使用确定性解析，扫描页和复杂视觉内容才调用 Vision；
 - Excel/CSV 数值由本地解析器读取，不让视觉模型重新猜测单元格；
 - 源文件扫描、单文件上传、文件夹上传、下载、原子替换和路径越界保护；
@@ -484,7 +484,7 @@ alembic check
 python -m pip check
 ```
 
-当前测试集包含 157 个测试，覆盖认证、数据库、模型客户端、文件管理、转换、后台任务、增量索引、导航、回答生成、Admin UI 和生产打包。
+当前测试集包含 181 个测试，覆盖认证、数据库、模型客户端、文件管理、转换、后台任务、增量索引、导航、回答生成、Admin UI 和生产打包。
 
 ### 本地构建镜像
 
@@ -654,7 +654,7 @@ Worker 每次启动都会清理旧 `RUNNING` 租约并重新投递所有活动�
 - Worker 默认并发为 1，以限制 SQLite 和文件系统争用；
 - 容器内进程以 root 运行，以兼容常见 bind mount 权限；
 - 不支持音频和视频转换；
-- 扫描件、复杂 PDF/PPTX/DOCX 的质量取决于本地可提取内容和多模态模型能力；
+- 扫描件、复杂 PDF/PPT/PPTX/DOC/DOCX 的质量取决于本地可提取内容和多模态模型能力；旧式 WMF/EMF 或损坏的单张嵌入图片无法解码时会保留正文并明确标注该视觉内容不可用；
 - 转换、索引、导航和回答都需要可用的外部模型 API；
 - 浏览器 IndexedDB 中的聊天不会跨设备同步，清除站点数据会清除本地会话；
 - 为获得 SQLite 与文件 artifact 的一致备份，建议备份前短暂停止容器。
